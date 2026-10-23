@@ -13,3 +13,7 @@ find_package(nlohmann_json REQUIRED)
 # wdtriples: (property, entity, target) triples of entity links of a dump part
 add_executable(wdtriples tools/wdtriples.cpp)
 target_link_libraries(wdtriples BZip2::BZip2 nlohmann_json::nlohmann_json)
+
+# wdindex: triples and block indexes of all parts of a dump, in threads
+add_executable(wdindex tools/wdindex.cpp)
+target_link_libraries(wdindex BZip2::BZip2 nlohmann_json::nlohmann_json)
