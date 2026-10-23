@@ -123,3 +123,15 @@ the English one (lexemes: lemma), else the first; pages without entity JSON
 (redirects) are `other` with their page title. Blocks without pages (siteinfo,
 end of the file) have count 0, so a block's compressed length is always the
 next offset (or `EOF`) minus its own offset.
+
+## Planned formats of entities
+- Items (Q, over 100 million): a binary format, fields of whole bytes (enums
+  such as rank or entity type are one byte each), compressed in bz2 blocks.
+- Properties (P, about 14 thousand) and lexemes (L, about 1.7 million): JSONL,
+  one entity per line. Lexemes differ much from items and from each other
+  (forms and senses with ids like `L7-F2`, `L7-S1`, their own claims; values
+  pointing to lexemes, forms and senses), properties are few: neither is worth
+  a binary format.
+- Not needed for browsing and left out: statement ids and snak hashes (for
+  editing only), lexeme counters `nextFormId` and `nextSenseId` (ids of
+  deleted forms and senses are never reused, so they are no count).
