@@ -52,6 +52,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
   target, item, rank), each triple once. Input files are memory-mapped; from each one
   a contiguous run (about 1/256 of it) goes to an output file.
 
+- `wddense [-i index] [-o .] <date>.lst` – dense indexes of entities from the
+  block indexes of `wdindex` (no second pass over the dump): `q.idx`, `p.idx`,
+  `l.idx`, see below.
+
 ## Building the reverse index of entity links
 
 ```
@@ -105,6 +109,24 @@ search, and `wdmerge` merges these runs. The same works for any power of two:
 "All items with occupation (P106) writer (Q36180)": file `triple-index/106`
 (106 % 256), binary search for (reverse(106), 36180): the items of the run are
 the answer, in increasing order, with the rank of each statement.
+
+### Dense indexes of entities
+Numbers of entities are dense, so the entry of Q*N* is at byte N × 12 of
+`q.idx`: one seek, no search. An entry has 12 bytes, little-endian:
+
+| bytes | field |
+|---|---|
+| 0–1 | dump part: line `NNN` of the `.lst` |
+| 2–7 | offset of the page's bz2 stream in that part (48 bits) |
+| 8–11 | start of the page in the uncompressed stream |
+
+An absent entity (never created, deleted, or merged into another: its page is a
+redirect) has an entry of zeros – offset 0 is the siteinfo stream of every part,
+never a page. `l.idx` is the same for lexemes. `p.idx` is small and also holds
+the English labels, to show `instance of` instead of `P31`: uint32 count, then
+16-byte entries (12 bytes as above, uint32 offset of the label in the names),
+then the names, UTF-8, each ended by `\0`. Sizes: about 1.7 GB for Q (up to
+Q~140 million), 20 MB for L, under 1 MB for P.
 
 ### Block index
 `index/NNN` of `wdindex` lists the bz2 blocks of dump part `NNN` and their

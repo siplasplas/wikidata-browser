@@ -22,3 +22,6 @@ target_link_libraries(wdindex BZip2::BZip2 nlohmann_json::nlohmann_json)
 add_executable(wdsort tools/wdsort.cpp tools/triples.h)
 # wdmerge: merges the sorted triple files into 256 index files by property % 256
 add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)
+
+# wddense: dense indexes q.idx, p.idx (with English names), l.idx from index/ of wdindex
+add_executable(wddense tools/wddense.cpp)
