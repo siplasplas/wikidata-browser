@@ -1,6 +1,6 @@
-// wdtriples: links between Wikidata entities from the start of a dump part, as
-// 14-byte triples (triples.h): property, item, target, target type, rank, e.g.
-// (31, 56782, 34770, item, normal) for "Q56782 instance of (P31) Q34770".
+// wdtriples: links between Wikidata items from the start of a dump part, as
+// 12-byte triples (triples.h): property, item << 2 | rank, target, e.g.
+// (31, 56782 << 2 | normal, 34770) for "Q56782 instance of (P31) Q34770".
 //
 // wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2
 //
@@ -130,11 +130,12 @@ int main(int argc, char *argv[]) {
                 if (statements.is_array())
                     stats.statements += statements.size();
             triples.clear();
-            appendTriples(entity, triples);
+            size_t other = 0;
+            appendTriples(entity, triples, &other);
+            stats.targetTypes["property or lexeme, left out"] += other;
             for (const auto &t : triples) {
                 ++stats.triples;
-                ++stats.targetTypes[t.targetType == EntityType::item ? "item" : t.targetType == EntityType::property ? "property" : "lexeme"];
-                ++stats.ranks[t.rank == Rank::preferred ? "preferred" : t.rank == Rank::deprecated ? "deprecated" : "normal"];
+                ++stats.ranks[t.rank() == Rank::preferred ? "preferred" : t.rank() == Rank::deprecated ? "deprecated" : "normal"];
             }
             if (out)
                 out.write(reinterpret_cast<const char *>(triples.data()), static_cast<std::streamsize>(triples.size() * sizeof(Triple)));
@@ -190,7 +191,7 @@ int main(int argc, char *argv[]) {
               << "statements:        " << stats.statements << "\n"
               << "triples:           " << stats.triples << " = " << stats.triples * sizeof(Triple) << " bytes ("
               << double(stats.triples) / std::max<uint64_t>(1, stats.items) << " per item)\n"
-              << "target types:     ";
+              << "other targets:    ";
     for (const auto &[type, count] : stats.targetTypes)
         std::cout << " " << type << " " << count;
     std::cout << "\nranks:            ";

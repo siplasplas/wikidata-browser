@@ -6,10 +6,11 @@
 
 #include "triples.h"
 
-// For each claim P.. of an item, the main snak's value when it is an entity
-// (datavalue.value: entity-type, numeric-id), with the statement's rank.
+// For each claim P.. of an item, the main snak's value when it is an item
+// (datavalue.value: entity-type item, numeric-id), with the statement's rank.
 // Returns the number of triples added; nothing for other entities than items.
-inline size_t appendTriples(const nlohmann::json &entity, std::vector<Triple> &triples) {
+// Values of other entity types (property, lexeme) are counted in otherTargets.
+inline size_t appendTriples(const nlohmann::json &entity, std::vector<Triple> &triples, size_t *otherTargets = nullptr) {
     const auto id = entity.find("id");
     const auto claims = entity.find("claims");
     if (id == entity.end() || !id->is_string() || claims == entity.end() || !claims->is_object())
@@ -36,21 +37,16 @@ inline size_t appendTriples(const nlohmann::json &entity, std::vector<Triple> &t
             const auto number = value.find("numeric-id");
             if (number == value.end() || !number->is_number_unsigned())
                 continue;
-            const auto type = value.value("entity-type", "item");
-            EntityType targetType;
-            if (type == "item")
-                targetType = EntityType::item;
-            else if (type == "property")
-                targetType = EntityType::property;
-            else if (type == "lexeme")
-                targetType = EntityType::lexeme;
-            else
-                continue; // forms and senses have no numeric-id
+            if (value.value("entity-type", "item") != "item") {
+                if (otherTargets)
+                    ++*otherTargets;
+                continue;
+            }
             const auto rankName = statement.value("rank", "normal");
             const Rank rank = rankName == "preferred"    ? Rank::preferred
                               : rankName == "deprecated" ? Rank::deprecated
                                                          : Rank::normal;
-            triples.push_back({p, subject, number->get<uint32_t>(), targetType, rank});
+            triples.push_back(Triple::make(p, subject, rank, number->get<uint32_t>()));
             ++added;
         }
     }

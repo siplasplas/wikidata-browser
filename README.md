@@ -20,8 +20,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
   001: 764071939:wikidatawiki-20261001-pages-articles-multistream10.xml-p13998368p15498367.bz2
   ```
 - `wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2` – the triples (see
-  below) of a dump part, with sizes, pages, statements, triples by target type
-  and rank; `--limit` reads only the first MB of compressed data.
+  below) of a dump part, with sizes, pages, statements, triples by rank; `--limit` reads only the first MB of compressed data.
 - `wdindex [-j 20] [-t triples] [-i index] <dump directory> <date>.lst` – one
   pass over all parts of a dump (`<date>.lst` of `wdlist`), in threads taking
   parts from a queue (the largest first). For part `NNN` it writes
@@ -41,13 +40,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
-  `wdindex` by (bit-reversed property, target type, target, item, rank), leaves out repeated
+  `wdindex` by (bit-reversed property, target, item, rank), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
   files from a queue, the largest first; `NNN.part` is renamed when done.
 - `wdmerge [-j 20] [sort-triples [triple-index]]` – merges the sorted files into
   256 index files `triple-index/000` … `255`: file `NNN` holds the triples of
   all parts with property % 256 = `NNN`, sorted by (bit-reversed property,
-  target type, target, item, rank), each triple once. Input files are memory-mapped; from each one
+  target, item, rank), each triple once. Input files are memory-mapped; from each one
   a contiguous run (about 1/256 of it) goes to an output file.
 
 ## Building the reverse index of entity links
@@ -63,26 +62,23 @@ Use a Release build: in a Debug build JSON parsing is about 15 times slower
 and `wdindex` takes about 5 hours instead of 1.
 
 ### Triples
-A triple has 14 bytes (`tools/triples.h`): property, item, target as
-little-endian uint32 – the numbers of `P`, `Q` and the target entity of a
-claim's main snak – then one byte of the target type and one byte of the
-statement's rank. Fields are whole bytes, not bits: the binary files are
-compressed anyway.
+A triple has 12 bytes, 3 little-endian uint32 (`tools/triples.h`): property,
+item with rank, target – always P, Q, Q: only claims whose main snak's value is
+an item (`datavalue.value` with entity-type `item` and `numeric-id`) give
+triples, about 40–60% of all claims; values that are properties or lexemes
+(about 0.03%) are left out.
 
-| byte | field | values |
+| bytes | field | |
 |---|---|---|
 | 0–3 | property | 31 for P31 |
-| 4–7 | item | the entity with the claim (always a Q) |
-| 8–11 | target | the entity it points to |
-| 12 | target type | 0 item (Q), 1 property (P), 2 lexeme (L) |
-| 13 | rank | 0 deprecated, 1 normal, 2 preferred |
+| 4–7 | item << 2 \| rank | 30 bits for the item (up to Q1073741823), 2 bits for the rank: 0 deprecated, 1 normal, 2 preferred |
+| 8–11 | target | the item it points to |
 
-(31, 56782, 34770, 0, 1) is "Q56782 instance of (P31) Q34770", rank normal.
-Only claims whose value is an entity (`datavalue.value.numeric-id`) give
-triples, about 40–60% of all claims. Ranks: the "truthy" values of a property
-are its preferred ones if there are any, else its normal ones; deprecated
-values are wrong ones kept (with a reason, P2241). In a sample about 99.8% are
-normal.
+The rank is in the low bits so that sorting by the field sorts by item.
+(31, 56782 << 2 | 1, 34770) is "Q56782 instance of (P31) Q34770", rank normal.
+The "truthy" values of a property are its preferred ones if there are any,
+else its normal ones; deprecated values are wrong ones kept (with a reason,
+P2241). In a sample about 99.8% are normal.
 
 ### Splitting by property modulo
 The index is split into files by property % 256, not by property ranges, so the
@@ -104,8 +100,8 @@ search, and `wdmerge` merges these runs. The same works for any power of two:
 
 ### Lookup
 "All items with occupation (P106) writer (Q36180)": file `triple-index/106`
-(106 % 256), binary search for (reverse(106), item, 36180): the items of the
-run are the answer, in increasing order, with the rank of each statement.
+(106 % 256), binary search for (reverse(106), 36180): the items of the run are
+the answer, in increasing order, with the rank of each statement.
 
 ### Block index
 `index/NNN` of `wdindex` lists the bz2 blocks of dump part `NNN` and their

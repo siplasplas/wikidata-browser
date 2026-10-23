@@ -1,35 +1,42 @@
 #pragma once
-// Triples of entity links, 14 bytes: property, item, target as little-endian
-// uint32, then the target's type and the statement's rank as one byte each,
-// e.g. (31, 56782, 34770, item, normal): Q56782 instance of (P31) Q34770.
-// Bytes, not bits: the binary files are compressed anyway.
+// Triples of entity links, 12 bytes as 3 little-endian uint32: property, item
+// with rank, target (always P, Q, Q: links to properties and lexemes are left
+// out). The item's field holds item << 2 | rank: 30 bits for the item number
+// (up to Q1073741823), 2 bits for the statement's rank, in the low bits so that
+// sorting by the field sorts by item.
+// (31, 56782 << 2 | normal, 34770): Q56782 instance of (P31) Q34770.
 //
 // Sorted for the reverse lookup ("all items with P106 = Q36180, writer") by
-// (bit-reversed property, target type, target, item, rank). Bit reversal puts property % 256 in
-// the top 8 bits, so the triples of property % 256 = k are one contiguous run
-// of a sorted file: the indexes are split into 256 files by property modulo,
-// whatever the number of properties.
+// (bit-reversed property, target, item, rank). Bit reversal puts property % 256
+// in the top 8 bits, so the triples of property % 256 = k are one contiguous
+// run of a sorted file: the indexes are split into 256 files by property
+// modulo, whatever the number of properties.
 #include <bit>
 #include <chrono>
 #include <cstdint>
 #include <format>
+#include <stdexcept>
 #include <string>
-
-// Type of an entity: Q, P, L
-enum class EntityType : uint8_t { item = 0, property = 1, lexeme = 2 };
 
 // Rank of a statement; "truthy" values: the preferred ones of a property if
 // there are any, else the normal ones; deprecated ones are wrong values kept
 enum class Rank : uint8_t { deprecated = 0, normal = 1, preferred = 2 };
 
-struct [[gnu::packed]] Triple {
+struct Triple {
     uint32_t property;
-    uint32_t item;   // the entity with the claim
-    uint32_t target; // the entity it points to
-    EntityType targetType;
-    Rank rank;
+    uint32_t itemRank; // item << 2 | rank
+    uint32_t target;
+
+    static constexpr uint32_t maxItem = (1u << 30) - 1;
+    static Triple make(uint32_t property, uint32_t item, Rank rank, uint32_t target) {
+        if (item > maxItem)
+            throw std::runtime_error(std::format("Q{} does not fit in 30 bits", item));
+        return {property, item << 2 | static_cast<uint32_t>(rank), target};
+    }
+    uint32_t item() const { return itemRank >> 2; }
+    Rank rank() const { return static_cast<Rank>(itemRank & 3); }
 };
-static_assert(sizeof(Triple) == 14);
+static_assert(sizeof(Triple) == 12);
 
 // The 32 bits in reverse order: bit 0 becomes bit 31
 constexpr uint32_t reverseBits(uint32_t x) {
@@ -43,23 +50,18 @@ static_assert(reverseBits(1) == 0x80000000u && reverseBits(0x80000000u) == 1 && 
 // Index file of a triple: property % 256
 constexpr uint32_t bucketOf(uint32_t property) { return property & 0xFF; }
 
-// Order of sorted triples: bit-reversed property, target type, target, item, rank
+// Order of sorted triples: bit-reversed property, target, item, rank
 inline bool operator<(const Triple &a, const Triple &b) {
     const auto ra = reverseBits(a.property), rb = reverseBits(b.property);
     if (ra != rb)
         return ra < rb;
-    if (a.targetType != b.targetType)
-        return a.targetType < b.targetType;
     if (a.target != b.target)
         return a.target < b.target;
-    if (a.item != b.item)
-        return a.item < b.item;
-    return a.rank < b.rank;
+    return a.itemRank < b.itemRank;
 }
 
 inline bool operator==(const Triple &a, const Triple &b) {
-    return a.property == b.property && a.item == b.item && a.target == b.target && a.targetType == b.targetType &&
-           a.rank == b.rank;
+    return a.property == b.property && a.itemRank == b.itemRank && a.target == b.target;
 }
 
 inline std::string duration(double seconds) {

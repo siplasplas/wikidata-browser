@@ -3,7 +3,7 @@
 // wdmerge [-j 20] [sort-triples [triple-index]]
 //
 // Output file NNN (000-255) holds the triples of all input files whose
-// property % 256 = NNN, sorted by (bit-reversed property, target type, target,
+// property % 256 = NNN, sorted by (bit-reversed property, target,
 // item, rank): "all
 // items with P106 = Q36180" are one contiguous run of file 106, found by binary
 // search. In every sorted input file these triples are one contiguous run (the
@@ -39,7 +39,7 @@ public:
     explicit Mapped(const fs::path &file) {
         size_ = fs::file_size(file);
         if (size_ % sizeof(Triple))
-            throw std::runtime_error(file.string() + ": size is no multiple of 14");
+            throw std::runtime_error(file.string() + ": size is no multiple of 12");
         if (size_ == 0)
             return;
         const int fd = ::open(file.c_str(), O_RDONLY);
