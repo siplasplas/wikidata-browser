@@ -20,7 +20,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
   001: 764071939:wikidatawiki-20261001-pages-articles-multistream10.xml-p13998368p15498367.bz2
   ```
 - `wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2` – the triples (see
-  below) of a dump part, with sizes, pages, statements, triples by rank; `--limit` reads only the first MB of compressed data.
+  below) of a dump part, with sizes, pages, statements, triples by rank and
+  the entity types of values (claims, qualifiers, lexeme forms and senses) by
+  kind of entity; `--offsets FILE` reads only the bz2 blocks at the listed
+  offsets (e.g. those of property or lexeme pages from the dump's index); `--limit` reads only the first MB of compressed data.
 - `wdindex [-j 20] [-t triples] [-i index] <dump directory> <date>.lst` – one
   pass over all parts of a dump (`<date>.lst` of `wdlist`), in threads taking
   parts from a queue (the largest first). For part `NNN` it writes

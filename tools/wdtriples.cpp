@@ -58,24 +58,29 @@ struct Stats {
     uint64_t compressed = 0, uncompressed = 0, pages = 0, items = 0, properties = 0, other = 0, invalid = 0;
     uint64_t triples = 0, statements = 0;
     std::map<std::string, uint64_t> targetTypes, ranks; // of the triples
+    std::vector<std::string> oddIds; // titles of pages whose "id" is no string
+    std::map<std::string, uint64_t> valueTypes; // "Q claim -> item": entity values by entity kind and place
 };
 
 } // namespace
 
 int main(int argc, char *argv[]) {
     uint64_t limit = 0;
-    std::string input, output;
+    std::string input, output, offsetsFile;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--limit" && i + 1 < argc)
             limit = std::stoull(argv[++i]) * 1000 * 1000;
         else if (arg == "-o" && i + 1 < argc)
             output = argv[++i];
+        else if (arg == "--offsets" && i + 1 < argc)
+            offsetsFile = argv[++i];
         else
             input = arg;
     }
     if (input.empty()) {
-        std::cerr << "usage: wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2\n";
+        std::cerr << "usage: wdtriples [--limit MB | --offsets FILE] [-o triples.bin] dump.xml.bz2\n"
+                     "  --offsets: only the bz2 blocks starting at these offsets (one per line)\n";
         return 1;
     }
     std::ifstream in(input, std::ios::binary);
@@ -119,7 +124,40 @@ int main(int argc, char *argv[]) {
                 ++stats.invalid;
                 continue;
             }
+            if (!entity["id"].is_string()) { // not an entity of Q, P, L
+                if (stats.oddIds.size() < 3)
+                    stats.oddIds.push_back(std::string(page.substr(page.find("<title>"), 80)));
+                ++stats.invalid;
+                continue;
+            }
             const auto id = entity["id"].get<std::string>();
+            // Entity values of claims and qualifiers, by kind of entity (Q, P, L) and place
+            auto countSnak = [&](const json &snak, const std::string &place) {
+                const auto datavalue = snak.find("datavalue");
+                if (datavalue == snak.end() || datavalue->value("type", "") != "wikibase-entityid")
+                    return;
+                const auto &value = (*datavalue)["value"];
+                ++stats.valueTypes[id.substr(0, 1) + " " + place + " -> " + value.value("entity-type", "?")];
+            };
+            auto countClaims = [&](const json &holder, const std::string &place) {
+                const auto claims = holder.find("claims");
+                if (claims == holder.end() || !claims->is_object())
+                    return;
+                for (const auto &[property, statements] : claims->items())
+                    for (const auto &statement : statements) {
+                        if (const auto snak = statement.find("mainsnak"); snak != statement.end())
+                            countSnak(*snak, place + "claim");
+                        if (const auto qualifiers = statement.find("qualifiers"); qualifiers != statement.end())
+                            for (const auto &[qp, snaks] : qualifiers->items())
+                                for (const auto &snak : snaks)
+                                    countSnak(snak, place + "qualifier");
+                    }
+            };
+            countClaims(entity, "");
+            for (const char *part : {"forms", "senses"})
+                if (const auto list = entity.find(part); list != entity.end() && list->is_array())
+                    for (const auto &element : *list)
+                        countClaims(element, std::string(part).substr(0, std::string(part).size() - 1) + " ");
             if (id.starts_with('Q'))
                 ++stats.items;
             else if (id.starts_with('P'))
@@ -143,7 +181,37 @@ int main(int argc, char *argv[]) {
         text.erase(0, pos);
     };
 
-    bool done = false;
+    // Only the listed blocks: each one an independent bz2 stream
+    if (!offsetsFile.empty()) {
+        std::ifstream list(offsetsFile);
+        for (uint64_t offset; list >> offset;) {
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(offset));
+            bz_stream one{};
+            BZ2_bzDecompressInit(&one, 0, 0);
+            int status = BZ_OK;
+            while (status == BZ_OK) {
+                if (one.avail_in == 0) {
+                    in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+                    if (in.gcount() == 0)
+                        break;
+                    one.next_in = buffer.data();
+                    one.avail_in = static_cast<unsigned>(in.gcount());
+                }
+                one.next_out = decoded.data();
+                one.avail_out = static_cast<unsigned>(decoded.size());
+                status = BZ2_bzDecompress(&one);
+                stats.uncompressed += decoded.size() - one.avail_out;
+                text.append(decoded.data(), decoded.size() - one.avail_out);
+            }
+            stats.compressed += one.total_in_lo32;
+            BZ2_bzDecompressEnd(&one);
+            if (status != BZ_STREAM_END)
+                std::cerr << "no bz2 stream at " << offset << std::endl;
+            parsePages();
+        }
+    }
+    bool done = !offsetsFile.empty();
     while (!done) {
         if (bz.avail_in == 0) {
             if (limit && stats.compressed >= limit)
@@ -194,6 +262,11 @@ int main(int argc, char *argv[]) {
               << "other targets:    ";
     for (const auto &[type, count] : stats.targetTypes)
         std::cout << " " << type << " " << count;
+    for (const auto &title : stats.oddIds)
+        std::cout << "\nid not a string: " << title;
+    std::cout << "\nentity values:";
+    for (const auto &[key, count] : stats.valueTypes)
+        std::cout << "\n  " << key << " " << count;
     std::cout << "\nranks:            ";
     for (const auto &[rank, count] : stats.ranks)
         std::cout << " " << rank << " " << count;
