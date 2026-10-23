@@ -17,3 +17,8 @@ target_link_libraries(wdtriples BZip2::BZip2 nlohmann_json::nlohmann_json)
 # wdindex: triples and block indexes of all parts of a dump, in threads
 add_executable(wdindex tools/wdindex.cpp)
 target_link_libraries(wdindex BZip2::BZip2 nlohmann_json::nlohmann_json)
+
+# wdsort: sorts the triple files by (bit-reversed property, target, item)
+add_executable(wdsort tools/wdsort.cpp tools/triples.h)
+# wdmerge: merges the sorted triple files into 256 index files by property % 256
+add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)

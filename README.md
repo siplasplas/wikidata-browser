@@ -43,3 +43,71 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
   JSON (redirects) are `other` with their page title. Blocks without pages
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
+- `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
+  `wdindex` by (bit-reversed property, target, item), leaves out repeated
+  triples and writes it under the same name to `sort-triples`. Threads take
+  files from a queue, the largest first; `NNN.part` is renamed when done.
+- `wdmerge [-j 20] [sort-triples [triple-index]]` – merges the sorted files into
+  256 index files `triple-index/000` … `255`: file `NNN` holds the triples of
+  all parts with property % 256 = `NNN`, sorted by (bit-reversed property,
+  target, item), each triple once. Input files are memory-mapped; from each one
+  a contiguous run (about 1/256 of it) goes to an output file.
+
+## Building the reverse index of entity links
+
+```
+wdlist <dump directory>                                 # 20261001.lst
+wdindex -j 20 <dump directory> 20261001.lst             # triples/, index/  (~1 h, Release build)
+wdsort -j 20                                            # sort-triples/
+wdmerge -j 20                                           # triple-index/
+```
+
+Use a Release build: in a Debug build JSON parsing is about 15 times slower
+and `wdindex` takes about 5 hours instead of 1.
+
+### Triples
+A triple is 3 little-endian uint32: property, item, target – the numbers of
+`P`, `Q` and the target entity of a claim's main snak: (31, 56782, 34770) is
+"Q56782 instance of (P31) Q34770". Only claims whose value is an entity
+(`datavalue.value.numeric-id`) give triples, about 40–60% of all claims.
+
+### Splitting by property modulo
+The index is split into files by property % 256, not by property ranges, so the
+split does not depend on how many properties there are. Triples are sorted by
+the property with its 32 bits reversed (bit 0 becomes bit 31):
+
+```cpp
+x = ((x >> 1) & 0x55555555) | ((x & 0x55555555) << 1);
+x = ((x >> 2) & 0x33333333) | ((x & 0x33333333) << 2);
+x = ((x >> 4) & 0x0F0F0F0F) | ((x & 0x0F0F0F0F) << 4);
+x = std::byteswap(x);
+```
+
+Reversal puts the low bits of the property on top: the top 8 bits of the
+reversed property are the reversed property % 256. In every sorted file the
+triples of one remainder are therefore one contiguous run, found by binary
+search, and `wdmerge` merges these runs. The same works for any power of two:
+2^n files take the top n bits of the reversed property.
+
+### Lookup
+"All items with occupation (P106) writer (Q36180)": file `triple-index/106`
+(106 % 256), binary search for (reverse(106), 36180): the items of the run are
+the answer, in increasing order.
+
+### Block index
+`index/NNN` of `wdindex` lists the bz2 blocks of dump part `NNN` and their
+pages, colon-separated:
+
+```
+offset:count:uncompressed        a block: position in the .bz2, number of pages, size uncompressed
+:start:symbol:title              a page: start in the uncompressed block, entity id or "other", label
+EOF=<size>                       size of the .bz2
+```
+
+`count` may differ between blocks. A page ends where the next one starts, the
+last at `uncompressed`, so it is cut out without parsing. The title is the last
+field and may contain colons: split only up to the third colon. The label is
+the English one (lexemes: lemma), else the first; pages without entity JSON
+(redirects) are `other` with their page title. Blocks without pages (siteinfo,
+end of the file) have count 0, so a block's compressed length is always the
+next offset (or `EOF`) minus its own offset.
