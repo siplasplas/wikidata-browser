@@ -1,6 +1,6 @@
-// wdtriples: links between Wikidata entities from a dump part, as triples of
-// 4-byte numbers (property, entity, target), e.g. (31, 56782, 34770) for
-// "Q56782 instance of (P31) Q34770". Reversed they answer "all writers".
+// wdtriples: links between Wikidata entities from the start of a dump part, as
+// 14-byte triples (triples.h): property, item, target, target type, rank, e.g.
+// (31, 56782, 34770, item, normal) for "Q56782 instance of (P31) Q34770".
 //
 // wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2
 //
@@ -8,7 +8,7 @@
 // only its first MB of compressed data), takes the JSON of each entity page
 // (<text>) and, for each claim P.. of it, the main snak's value when it is an
 // entity (datavalue.value.numeric-id). Prints the sizes, the number of pages,
-// entities and triples; -o writes the triples (little-endian uint32 x 3).
+// entities and triples; -o writes the triples.
 #include <bzlib.h>
 
 #include <chrono>
@@ -22,6 +22,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#include "claims.h"
 
 using json = nlohmann::json;
 
@@ -55,7 +57,7 @@ std::string unescape(std::string_view s) {
 struct Stats {
     uint64_t compressed = 0, uncompressed = 0, pages = 0, items = 0, properties = 0, other = 0, invalid = 0;
     uint64_t triples = 0, statements = 0;
-    std::map<std::string, uint64_t> targetTypes; // entity-type of the values taken
+    std::map<std::string, uint64_t> targetTypes, ranks; // of the triples
 };
 
 } // namespace
@@ -87,6 +89,7 @@ int main(int argc, char *argv[]) {
     const auto started = std::chrono::steady_clock::now();
     Stats stats;
     std::string text; // decompressed, not yet parsed
+    std::vector<Triple> triples;
     std::vector<char> buffer(1 << 20), decoded(1 << 22);
     bz_stream bz{};
     BZ2_bzDecompressInit(&bz, 0, 0);
@@ -123,33 +126,18 @@ int main(int argc, char *argv[]) {
                 ++stats.properties;
             else
                 ++stats.other;
-            if (!id.starts_with('Q') || !entity.contains("claims") || !entity["claims"].is_object())
-                continue;
-            const uint32_t subject = std::stoul(id.substr(1));
-            for (const auto &[property, statements] : entity["claims"].items()) {
-                if (!property.starts_with('P'))
-                    continue;
-                const uint32_t p = std::stoul(property.substr(1));
-                for (const auto &statement : statements) {
-                    ++stats.statements;
-                    const auto snak = statement.find("mainsnak");
-                    if (snak == statement.end())
-                        continue;
-                    const auto value = snak->find("datavalue");
-                    if (value == snak->end() || !value->contains("value") || !(*value)["value"].is_object())
-                        continue;
-                    const auto &v = (*value)["value"];
-                    const auto number = v.find("numeric-id");
-                    if (number == v.end() || !number->is_number())
-                        continue;
-                    ++stats.targetTypes[v.value("entity-type", "?")];
-                    ++stats.triples;
-                    if (out) {
-                        const uint32_t triple[3] = {p, subject, number->get<uint32_t>()};
-                        out.write(reinterpret_cast<const char *>(triple), sizeof triple);
-                    }
-                }
+            for (const auto &[property, statements] : entity.value("claims", json::object()).items())
+                if (statements.is_array())
+                    stats.statements += statements.size();
+            triples.clear();
+            appendTriples(entity, triples);
+            for (const auto &t : triples) {
+                ++stats.triples;
+                ++stats.targetTypes[t.targetType == EntityType::item ? "item" : t.targetType == EntityType::property ? "property" : "lexeme"];
+                ++stats.ranks[t.rank == Rank::preferred ? "preferred" : t.rank == Rank::deprecated ? "deprecated" : "normal"];
             }
+            if (out)
+                out.write(reinterpret_cast<const char *>(triples.data()), static_cast<std::streamsize>(triples.size() * sizeof(Triple)));
         }
         text.erase(0, pos);
     };
@@ -200,10 +188,13 @@ int main(int argc, char *argv[]) {
               << "pages:             " << stats.pages << " (items " << stats.items << ", properties " << stats.properties
               << ", other " << stats.other << ", without entity JSON " << stats.invalid << ")\n"
               << "statements:        " << stats.statements << "\n"
-              << "triples:           " << stats.triples << " = " << stats.triples * 12 << " bytes ("
+              << "triples:           " << stats.triples << " = " << stats.triples * sizeof(Triple) << " bytes ("
               << double(stats.triples) / std::max<uint64_t>(1, stats.items) << " per item)\n"
               << "target types:     ";
     for (const auto &[type, count] : stats.targetTypes)
         std::cout << " " << type << " " << count;
+    std::cout << "\nranks:            ";
+    for (const auto &[rank, count] : stats.ranks)
+        std::cout << " " << rank << " " << count;
     std::cout << "\ntime:              " << seconds << " s\n";
 }

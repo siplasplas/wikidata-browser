@@ -3,7 +3,7 @@
 // wdsort [-j 20] [triples [sort-triples]]
 //
 // Each file NNN of the input directory (default triples) is read, sorted by
-// (bit-reversed property, target, item), freed of repeated triples and written
+// (bit-reversed property, target type, target, item, rank), freed of repeated triples and written
 // to the output directory (default sort-triples) under the same name; see
 // triples.h. Files are taken from a queue by the threads, the largest first;
 // a file is written as NNN.part and renamed when done, so a stopped run
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
             if (!entry.is_regular_file() || name.ends_with(".part") || fs::exists(output / name))
                 continue;
             if (entry.file_size() % sizeof(Triple))
-                throw std::runtime_error(entry.path().string() + ": size is no multiple of 12");
+                throw std::runtime_error(entry.path().string() + ": size is no multiple of 14");
             todo.push_back({name, entry.file_size()});
             total += entry.file_size();
         }

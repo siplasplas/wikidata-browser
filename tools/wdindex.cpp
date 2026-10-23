@@ -9,8 +9,7 @@
 // done, so a stopped run continues with the parts not done yet.
 //
 // triples/NNN: for each claim P.. of an item, the main snak's entity value, as
-// little-endian uint32 x 3: property, item, target ((31, 56782, 34770): Q56782
-// instance of Q34770).
+// 14-byte triples of triples.h: property, item, target, target type, rank.
 //
 // index/NNN: the bz2 blocks of the dump part (each an independent stream of
 // about 100 pages), colon-separated:
@@ -42,6 +41,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#include "claims.h"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -124,7 +125,7 @@ struct Progress {
 };
 
 // One bz2 block (stream) of a part: index lines of its pages, triples of its items
-void processBlock(const std::string &text, uint64_t offset, std::string &index, std::vector<uint32_t> &triples,
+void processBlock(const std::string &text, uint64_t offset, std::string &index, std::vector<Triple> &triples,
                   Progress &progress) {
     std::vector<std::pair<size_t, std::string>> entries; // start, "symbol:title"
     for (size_t pos = 0;;) {
@@ -150,31 +151,7 @@ void processBlock(const std::string &text, uint64_t offset, std::string &index, 
             if (!entity.is_discarded() && entity.is_object() && entity.contains("id") && entity["id"].is_string()) {
                 symbol = entity["id"].get<std::string>();
                 title = label(entity);
-                const auto claims = entity.find("claims");
-                if (symbol.starts_with('Q') && claims != entity.end() && claims->is_object()) {
-                    const auto subject = static_cast<uint32_t>(std::stoul(symbol.substr(1)));
-                    for (const auto &[property, statements] : claims->items()) {
-                        if (!property.starts_with('P') || !statements.is_array())
-                            continue;
-                        const auto p = static_cast<uint32_t>(std::stoul(property.substr(1)));
-                        for (const auto &statement : statements) {
-                            const auto snak = statement.find("mainsnak");
-                            if (snak == statement.end())
-                                continue;
-                            const auto datavalue = snak->find("datavalue");
-                            if (datavalue == snak->end() || !datavalue->contains("value"))
-                                continue;
-                            const auto &value = (*datavalue)["value"];
-                            if (!value.is_object())
-                                continue;
-                            const auto number = value.find("numeric-id");
-                            if (number == value.end() || !number->is_number_unsigned())
-                                continue;
-                            triples.insert(triples.end(), {p, subject, number->get<uint32_t>()});
-                            ++progress.triples;
-                        }
-                    }
-                }
+                progress.triples += appendTriples(entity, triples);
             }
         }
         entries.emplace_back(start, symbol + ':' + oneLine(title));
@@ -197,7 +174,7 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
 
     std::vector<char> buffer(1 << 20), decoded(1 << 22);
     std::string text, index;
-    std::vector<uint32_t> triples;
+    std::vector<Triple> triples;
     bz_stream bz{};
     BZ2_bzDecompressInit(&bz, 0, 0);
     uint64_t read = 0;        // bytes read from the file
@@ -232,9 +209,9 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
                 indexOut << index;
                 index.clear();
             }
-            if (triples.size() > (4 << 20)) {
+            if (triples.size() > (1 << 20)) {
                 triplesOut.write(reinterpret_cast<const char *>(triples.data()),
-                                 static_cast<std::streamsize>(triples.size() * sizeof(uint32_t)));
+                                 static_cast<std::streamsize>(triples.size() * sizeof(Triple)));
                 triples.clear();
             }
         } else if (status != BZ_OK)
@@ -245,18 +222,13 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
         throw std::runtime_error(std::format("{}: incomplete bz2 stream at {}", part.name, blockStart));
     indexOut << index << "EOF=" << read << '\n';
     triplesOut.write(reinterpret_cast<const char *>(triples.data()),
-                     static_cast<std::streamsize>(triples.size() * sizeof(uint32_t)));
+                     static_cast<std::streamsize>(triples.size() * sizeof(Triple)));
     if (!indexOut || !triplesOut)
         throw std::runtime_error(part.name + ": write failed");
     indexOut.close();
     triplesOut.close();
     fs::rename(triplesDir / (name + ".part"), triplesDir / name);
     fs::rename(indexDir / (name + ".part"), indexDir / name);
-}
-
-std::string duration(double seconds) {
-    const auto s = static_cast<long>(seconds);
-    return std::format("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60);
 }
 
 } // namespace
@@ -347,7 +319,7 @@ int main(int argc, char *argv[]) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         std::cout << std::format("done in {}: {} parts, {} pages, {} triples ({:.1f} GB)", duration(seconds),
                                  progress.partsDone.load(), progress.pages.load(), progress.triples.load(),
-                                 progress.triples * 12 / 1e9)
+                                 progress.triples * sizeof(Triple) / 1e9)
                   << std::endl;
         if (!error.empty()) {
             std::cerr << "errors: parts with errors are left as .part; run again to redo them" << std::endl;
