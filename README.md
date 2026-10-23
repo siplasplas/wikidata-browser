@@ -6,6 +6,26 @@ Browser of Wikidata dumps (C++, Qt6), like wiktbrowse of wiktparse for Wiktionar
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
 ```
 
+## Browser
+`wdbrowse [file.jsonl | file.jsonl.bz2 | Q42]` (Qt6, with qcodeedit and
+qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
+`-DWDB_BROWSER=OFF` builds only the tools):
+- File > Open: a JSONL file of entities (e.g. `wiktNeeded_1.jsonl` of
+  wiktparse), plain or `.jsonl.bz2` with its `.jsonl.idx`; the lines with id
+  and English label, a filter, "go to line".
+- Go > Entity (Ctrl+G): `Q42`, `P31` or `L7` read from the whole dump through
+  `q.idx`, `p.idx`, `l.idx` (`wddense`): one bz2 stream is decompressed.
+- JSON tab: the original JSON, indented, Kate highlighting and folding; Tree
+  tab: keys and values, with View > Property names (`P31  instance of`, from
+  `p.idx`).
+- Entity ids in the tree (`Q5`, `P31`, Wikidata URLs of units, calendars,
+  globes) are links: click or F2 goes to the entity; Go > Back / Forward
+  (Alt+Left, Alt+Right) through the places shown, lines and entities.
+- Search > Find (Ctrl+F, F3, Shift+F3) in the JSON and the tree; F4 opens the
+  JSON in Kate.
+- Settings: the index directory (`q.idx`, `p.idx`, `l.idx`, `<date>.lst`) and
+  the dump directory, kept in `wdbrowse.ini` next to the binary.
+
 ## Tools
 - `wdlist [directory]` (default `.`) – finds the dump parts
   `wikidatawiki-<date>-pages-articles-multistream*.xml-*.bz2` in the directory

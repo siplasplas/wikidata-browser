@@ -25,3 +25,40 @@ add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)
 
 # wddense: dense indexes q.idx, p.idx (with English names), l.idx from index/ of wdindex
 add_executable(wddense tools/wddense.cpp)
+
+# wdbrowse: the browser (Qt6). The tools above need no Qt; -DWDB_BROWSER=OFF builds only them.
+option(WDB_BROWSER "Build the browser wdbrowse (Qt6, qcodeedit, qt-extra)" ON)
+if(WDB_BROWSER)
+    set(CMAKE_AUTOMOC ON)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets)
+    # qcodeedit (LGPL-3.0): the editor widget with Kate syntax highlighting and
+    # folding. The sibling checkout ../qcodeedit when present, otherwise fetched.
+    set(QCE_BUILD_DEMO OFF CACHE BOOL "" FORCE)
+    set(QCE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(QCE_BUILD_KATE ON CACHE BOOL "" FORCE)
+    foreach(option QCE_BUILD_KATE_DOWNLOADER QCE_BUILD_ENCODING QCE_BUILD_GRAMMAR QCE_BUILD_SPELL
+            QCE_BUILD_SPELL_DOWNLOADER QCE_BUILD_SPELLTUNE QCE_BUILD_DIFF)
+        set(${option} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    include(FetchContent)
+    set(QCODEEDIT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../qcodeedit CACHE PATH "qcodeedit sources")
+    if(EXISTS ${QCODEEDIT_DIR}/CMakeLists.txt)
+        FetchContent_Declare(qcodeedit SOURCE_DIR ${QCODEEDIT_DIR})
+    else()
+        FetchContent_Declare(qcodeedit GIT_REPOSITORY https://gitlab.com/siplasplas/qcodeedit.git GIT_TAG master)
+    endif()
+    FetchContent_MakeAvailable(qcodeedit)
+    # qt-extra: the file dialog. The sibling checkout ../qt-extra when present, otherwise fetched.
+    set(QT_EXTRA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../qt-extra CACHE PATH "qt-extra sources")
+    if(EXISTS ${QT_EXTRA_DIR}/CMakeLists.txt)
+        FetchContent_Declare(qt-extra SOURCE_DIR ${QT_EXTRA_DIR})
+    else()
+        FetchContent_Declare(qt-extra GIT_REPOSITORY https://github.com/siplasplas/qt-extra.git GIT_TAG master)
+    endif()
+    FetchContent_MakeAvailable(qt-extra)
+
+    add_executable(wdbrowse browser/main.cpp browser/Entities.cpp browser/Entities.h browser/FindBar.cpp
+            browser/FindBar.h browser/TreeFindBar.cpp browser/TreeFindBar.h)
+    target_link_libraries(wdbrowse Qt6::Widgets qcodeedit::qcodeedit qcodeedit::kate qt-extra
+            nlohmann_json::nlohmann_json BZip2::BZip2)
+endif()
