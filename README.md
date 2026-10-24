@@ -70,6 +70,17 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   JSON (redirects) are `other` with their page title. Blocks without pages
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
+- `wdconvert [-j 20] [--level 9] [--frame 524288] [--removed removed] [-o slim] <dump directory> <date>.lst <Wikimedia index directory>`
+  – the dump slimmed (no hashes, no statement ids, no lexeme counters;
+  references kept; items of the mask `removed` left out) into
+  `slim/items/NNN`, `slim/properties/NNN`, `slim/lexemes/NNN`: one entity per
+  line in independent zstd frames of about 512 KiB, level 9, with a dictionary
+  per kind (`items.dict`, `properties.dict`, `lexemes.dict`, trained first on
+  a sample of streams and kept), each with its frame index `NNN.idx`
+  (`offset:count:uncompressed`, `:start:id`, `EOF=`); `slim/redirects/NNN`:
+  merged entities, `Q1:Q2`. Threads take parts from a queue; `.part` files,
+  a stopped run continues. `zstd -D slim/items.dict -dc slim/items/000` reads a
+  file.
 - `wdfilter [-j 20] [--class 13442814] [-i triple-index] [-o triple-index-slim] [--popularity popularity] [--removed removed]`
   – the triple index without the items of a class in no Wikipedia (scholarly
   articles by default): items with P31 = the class (rank not deprecated) and 0
@@ -101,6 +112,10 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
 - `wddense [-i index] [-s sitelinks] [-o .] <date>.lst` – dense indexes of
   entities from the block indexes of `wdindex` (no second pass over the dump):
   `q.idx`, `p.idx`, `l.idx`, and `popularity` from `sitelinks/`, see below.
+  `wddense --slim slim <date>.lst`: the same for the slim files of
+  `wdconvert`, from their frame indexes, into `slim/` (part = the file `NNN`
+  of the entity's kind; no names, no popularity: those of the dump's indexes
+  serve).
 
 - `wdnames [-j 20] [-i index] [-o .] <date>.lst` – name indexes of items from
   `index/` of `wdindex`: `names`, `names-by-q`, `q-by-name`, see below.
@@ -114,6 +129,8 @@ wdsort -j 20                                            # sort-triples/
 wdmerge -j 20                                           # triple-index/
 wddense 20261001.lst                                    # q.idx, p.idx, l.idx, popularity
 wdfilter -j 20                                          # removed, triple-index-slim/
+wdconvert -j 20 <dump directory> 20261001.lst <Wikimedia index directory>   # slim/ (~1 h)
+wddense --slim slim 20261001.lst                        # slim/q.idx, p.idx, l.idx
 ```
 
 Use a Release build: in a Debug build JSON parsing is about 15 times slower

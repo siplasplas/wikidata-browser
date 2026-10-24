@@ -9,6 +9,8 @@ add_executable(wdlist tools/wdlist.cpp)
 
 find_package(BZip2 REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
 # wdtriples: (property, entity, target) triples of entity links of a dump part
 add_executable(wdtriples tools/wdtriples.cpp)
@@ -25,9 +27,11 @@ add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)
 
 # wdsample: sizes of a slimmer Wikidata on a random sample of whole bz2 streams
 add_executable(wdsample tools/wdsample.cpp)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 target_link_libraries(wdsample BZip2::BZip2 nlohmann_json::nlohmann_json PkgConfig::ZSTD)
+
+# wdconvert: the dump slimmed, in zstd frames with dictionaries and frame indexes
+add_executable(wdconvert tools/wdconvert.cpp tools/dump.h tools/claims.h)
+target_link_libraries(wdconvert BZip2::BZip2 nlohmann_json::nlohmann_json PkgConfig::ZSTD)
 
 # wdfilter: triple index without scholarly articles in no Wikipedia; mask of the items left out
 add_executable(wdfilter tools/wdfilter.cpp tools/triples.h)

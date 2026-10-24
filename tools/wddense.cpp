@@ -1,6 +1,13 @@
 // wddense: dense indexes of entities from the block indexes of wdindex.
 //
 // wddense [-i index] [-s sitelinks] [-o .] <date>.lst
+// wddense --slim slim <date>.lst
+//
+// With --slim the frame indexes of wdconvert (slim/items/NNN.idx,
+// properties/NNN.idx, lexemes/NNN.idx: ":start:id", no titles) give the
+// indexes of the slim files, written into the slim directory; the part number
+// of an entry is then the NNN of the file of its kind, p.idx has no names (they
+// are those of the index of the dump) and there is no popularity.
 //
 // Reads index/NNN of every part NNN of the .lst and writes, in the output
 // directory, an index per entity kind where the entry of number N is at
@@ -84,7 +91,7 @@ struct Kind {
 } // namespace
 
 int main(int argc, char *argv[]) {
-    fs::path indexDir = "index", sitelinksDir = "sitelinks", output = ".";
+    fs::path indexDir = "index", sitelinksDir = "sitelinks", output = ".", slimDir;
     std::string list;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -94,11 +101,14 @@ int main(int argc, char *argv[]) {
             sitelinksDir = argv[++i];
         else if (arg == "-o" && i + 1 < argc)
             output = argv[++i];
+        else if (arg == "--slim" && i + 1 < argc)
+            slimDir = argv[++i];
         else
             list = arg;
     }
     if (list.empty()) {
-        std::cerr << "usage: wddense [-i index] [-s sitelinks] [-o .] <date>.lst\n";
+        std::cerr << "usage: wddense [-i index] [-s sitelinks] [-o .] <date>.lst\n"
+                     "       wddense --slim slim <date>.lst\n";
         return 1;
     }
     try {
@@ -113,11 +123,11 @@ int main(int argc, char *argv[]) {
         }
         Kind q{'Q'}, p{'P'}, l{'L'};
         uint64_t other = 0;
-        for (const auto part : parts) {
-            const auto file = indexDir / std::format("{:03}", part);
+        // An index: blocks "offset:count:uncompressed", pages ":start:id" or ":start:id:title", EOF=
+        auto readIndex = [&](const fs::path &file, uint16_t part) {
             std::ifstream in(file);
             if (!in)
-                throw std::runtime_error("cannot open " + file.string() + " (wdindex not finished?)");
+                throw std::runtime_error("cannot open " + file.string() + " (not finished?)");
             uint64_t offset = 0;
             bool complete = false;
             size_t lineNumber = 0;
@@ -135,13 +145,13 @@ int main(int argc, char *argv[]) {
                     offset = number<uint64_t>(v.substr(0, v.find(':')), where);
                     continue;
                 }
-                // page: :start:symbol:title
-                const auto second = v.find(':', 1), third = v.find(':', second + 1);
-                if (second == std::string_view::npos || third == std::string_view::npos)
+                const auto second = v.find(':', 1);
+                if (second == std::string_view::npos)
                     throw std::runtime_error(where + ": bad line");
+                const auto third = v.find(':', second + 1);
                 const auto start = number<uint32_t>(v.substr(1, second - 1), where);
-                const auto symbol = v.substr(second + 1, third - second - 1);
-                const auto title = v.substr(third + 1);
+                const auto symbol = v.substr(second + 1, third == std::string_view::npos ? third : third - second - 1);
+                const auto title = third == std::string_view::npos ? std::string_view() : v.substr(third + 1);
                 Kind *kind = symbol.starts_with('Q') ? &q : symbol.starts_with('P') ? &p : symbol.starts_with('L') ? &l : nullptr;
                 if (!kind) {
                     ++other;
@@ -150,7 +160,22 @@ int main(int argc, char *argv[]) {
                 kind->add(number<uint32_t>(symbol.substr(1), where), makeEntry(part, offset, start), title);
             }
             if (!complete)
-                throw std::runtime_error(file.string() + ": no EOF line (wdindex not finished?)");
+                throw std::runtime_error(file.string() + ": no EOF line (not finished?)");
+        };
+        for (const auto part : parts) {
+            if (slimDir.empty()) {
+                readIndex(indexDir / std::format("{:03}", part), part);
+                continue;
+            }
+            readIndex(slimDir / "items" / std::format("{:03}.idx", part), part);
+            for (const char *kind : {"properties", "lexemes"}) // only parts with such entities have them
+                if (const auto file = slimDir / kind / std::format("{:03}.idx", part); fs::exists(file))
+                    readIndex(file, part);
+        }
+        if (!slimDir.empty()) {
+            output = slimDir;
+            sitelinksDir.clear();
+            p.labels.assign(p.entries.size(), std::string()); // the names are those of the dump's p.idx
         }
 
         fs::create_directories(output);
@@ -189,7 +214,7 @@ int main(int argc, char *argv[]) {
         }
         std::cout << other << " other pages (redirects, not entities) left out" << std::endl;
         // Popularity: Wikipedias per item
-        if (fs::is_directory(sitelinksDir)) {
+        if (!sitelinksDir.empty() && fs::is_directory(sitelinksDir)) {
             std::vector<uint16_t> popularity(q.entries.size(), 0);
             uint64_t items = 0;
             for (const auto part : parts) {
