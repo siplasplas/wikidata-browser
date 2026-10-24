@@ -7,6 +7,7 @@
 #include <bzlib.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 #include "fold.h"
@@ -85,6 +86,8 @@ bool Entities::load(const QString &indexDir, const QString &dumpDir, QString &er
     byQCount_ = bytes / 4;
     byName_ = reinterpret_cast<const uint32_t *>(map("q-by-name", byNameFile_, bytes));
     byNameCount_ = bytes / 4;
+    popularity_ = reinterpret_cast<const uint16_t *>(map("popularity", popularityFile_, bytes));
+    popularitySize_ = bytes / 2;
     return true;
 }
 
@@ -245,4 +248,51 @@ QByteArray Entities::json(const QString &id, QString &error) {
             return reader.readElementText().toUtf8();
     error = "no <text> in the page" + (reader.hasError() ? ": " + reader.errorString() : QString());
     return {};
+}
+
+unsigned Entities::popularity(uint32_t number) const {
+    return popularity_ && qint64(number) < popularitySize_ ? popularity_[number] : 0;
+}
+
+std::vector<uint32_t> Entities::rankedNames(const QString &text, size_t &exact) const {
+    exact = 0;
+    const auto [lo, hi] = namesStartingWith(text);
+    if (lo == hi)
+        return {};
+    // The exact names are the first of the range (equal keys sort first)
+    const auto key = foldKey(text.toStdString());
+    uint64_t exactEnd = lo;
+    for (uint64_t a = lo, b = hi; a < b;) {
+        const uint64_t m = a + (b - a) / 2;
+        if (foldKey(nameAt(byName_[m])) == key)
+            a = m + 1;
+        else
+            b = m;
+        exactEnd = a;
+    }
+    exact = size_t(exactEnd - lo);
+    std::vector<uint32_t> result;
+    result.reserve(size_t(hi - lo));
+    // Each group by popularity, the most popular first: counting sort by the byte (stable)
+    for (const auto [from, to] : {std::pair{lo, exactEnd}, std::pair{exactEnd, hi}}) {
+        if (!popularity_) {
+            for (uint64_t i = from; i < to; ++i)
+                result.push_back(byName_[i]);
+            continue;
+        }
+        // buckets 0..65535 by 65535 - popularity: the most popular first
+        static thread_local std::vector<size_t> starts;
+        starts.assign(65537, 0);
+        for (uint64_t i = from; i < to; ++i)
+            ++starts[65536 - popularity(byName_[i])];
+        for (size_t b = 1; b < starts.size(); ++b)
+            starts[b] += starts[b - 1];
+        std::vector<uint32_t> group(size_t(to - from));
+        for (uint64_t i = to; i-- > from;) {
+            const auto q = byName_[i];
+            group[--starts[65536 - popularity(q)]] = q;
+        }
+        result.insert(result.end(), group.begin(), group.end());
+    }
+    return result;
 }

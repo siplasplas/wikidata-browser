@@ -1,6 +1,6 @@
 // wddense: dense indexes of entities from the block indexes of wdindex.
 //
-// wddense [-i index] [-o .] <date>.lst
+// wddense [-i index] [-s sitelinks] [-o .] <date>.lst
 //
 // Reads index/NNN of every part NNN of the .lst and writes, in the output
 // directory, an index per entity kind where the entry of number N is at
@@ -14,6 +14,9 @@
 //   bytes 0-1   number of the dump part (line NNN of the .lst)
 //   bytes 2-7   offset of the page's bz2 stream in that part (48 bits)
 //   bytes 8-11  start of the page in the uncompressed stream
+//   popularity     uint16 for Q0..Qmax: the number of language Wikipedias with
+//                  an article on the item (sitelinks/NNN of wdindex), for
+//                  ranking names found (Earth: over 300). Made when sitelinks/ exists.
 // An absent entity (never created, deleted, merged into another: its page is a
 // redirect) has an entry of zeros: offset 0 is the siteinfo stream of every
 // part, never a page.
@@ -81,19 +84,21 @@ struct Kind {
 } // namespace
 
 int main(int argc, char *argv[]) {
-    fs::path indexDir = "index", output = ".";
+    fs::path indexDir = "index", sitelinksDir = "sitelinks", output = ".";
     std::string list;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-i" && i + 1 < argc)
             indexDir = argv[++i];
+        else if (arg == "-s" && i + 1 < argc)
+            sitelinksDir = argv[++i];
         else if (arg == "-o" && i + 1 < argc)
             output = argv[++i];
         else
             list = arg;
     }
     if (list.empty()) {
-        std::cerr << "usage: wddense [-i index] [-o .] <date>.lst\n";
+        std::cerr << "usage: wddense [-i index] [-s sitelinks] [-o .] <date>.lst\n";
         return 1;
     }
     try {
@@ -183,6 +188,34 @@ int main(int argc, char *argv[]) {
                       << std::endl;
         }
         std::cout << other << " other pages (redirects, not entities) left out" << std::endl;
+        // Popularity: Wikipedias per item
+        if (fs::is_directory(sitelinksDir)) {
+            std::vector<uint16_t> popularity(q.entries.size(), 0);
+            uint64_t items = 0;
+            for (const auto part : parts) {
+                const auto file = sitelinksDir / std::format("{:03}", part);
+                std::ifstream in(file, std::ios::binary);
+                if (!in)
+                    throw std::runtime_error("cannot open " + file.string() + " (wdindex not finished?)");
+                for (std::array<uint8_t, 6> r; in.read(reinterpret_cast<char *>(r.data()), 6);) {
+                    const uint32_t item = r[0] | r[1] << 8 | r[2] << 16 | uint32_t(r[3]) << 24;
+                    const unsigned count = r[4] | r[5] << 8;
+                    if (item >= popularity.size())
+                        popularity.resize(item + 1, 0);
+                    popularity[item] = static_cast<uint16_t>(count);
+                    ++items;
+                }
+            }
+            const auto name = output / "popularity";
+            std::ofstream out(name, std::ios::binary);
+            out.write(reinterpret_cast<const char *>(popularity.data()),
+                      static_cast<std::streamsize>(popularity.size() * sizeof(uint16_t)));
+            if (!out)
+                throw std::runtime_error("cannot write " + name.string());
+            std::cout << std::format("{}: {} items in Wikipedias, {:.1f} MB", name.string(), items, popularity.size() * 2 / 1e6)
+                      << std::endl;
+        } else
+            std::cout << "no " << sitelinksDir.string() << "/: no popularity" << std::endl;
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         return 1;

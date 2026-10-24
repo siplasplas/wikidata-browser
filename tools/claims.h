@@ -1,5 +1,6 @@
 #pragma once
 // Triples of the claims of an entity's JSON (see triples.h)
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -60,4 +61,22 @@ inline size_t appendTriples(const nlohmann::json &entity, std::vector<Triple> &t
         }
     }
     return added;
+}
+
+// Number of language Wikipedias with an article on the entity: its sitelinks
+// "<code>wiki" (plwiki, simplewiki, zh_min_nanwiki), not the other projects
+// ending in "wiki" (Commons, Species, Meta...) nor wiktionary, wikisource...
+inline unsigned wikipediaCount(const nlohmann::json &entity) {
+    static const std::vector<std::string> notWikipedias = {
+            "abstractwiki", "commonswiki",      "foundationwiki", "incubatorwiki", "mediawikiwiki", "metawiki",
+            "outreachwiki", "sourceswiki",      "specieswiki",    "testwiki",      "test2wiki",     "wikidatawiki",
+            "wikifunctionswiki", "wikimaniawiki"};
+    const auto sitelinks = entity.find("sitelinks");
+    if (sitelinks == entity.end() || !sitelinks->is_object()) // [] when empty
+        return 0;
+    unsigned count = 0;
+    for (const auto &[site, link] : sitelinks->items())
+        if (site.ends_with("wiki") && std::find(notWikipedias.begin(), notWikipedias.end(), site) == notWikipedias.end())
+            ++count;
+    return count;
 }

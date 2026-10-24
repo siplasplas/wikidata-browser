@@ -16,8 +16,10 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
 - Search names (field above the list, Ctrl+K, Enter): the items whose name
   starts with the text, case and diacritics ignored (`lodz` finds Łódź),
   shown in the list on the left like the lines of a JSONL file – all of them,
-  millions for one letter, read only as shown (`names`, `names-by-q`,
-  `q-by-name` of `wdnames` in the index directory). Typing `Q42` goes to Q42.
+  millions for one letter, names read only as shown (`names`, `names-by-q`,
+  `q-by-name` of `wdnames` in the index directory). Exact names first, then
+  the most popular (`popularity` of `wddense`: number of Wikipedias, shown in
+  brackets). Typing `Q42` goes to Q42.
 - Go > Entity (Ctrl+G): `Q42`, `P31` or `L7` read from the whole dump through
   `q.idx`, `p.idx`, `l.idx` (`wddense`): one bz2 stream is decompressed.
 - JSON tab: the original JSON, indented, Kate highlighting and folding; Tree
@@ -52,7 +54,8 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
 - `wdindex [-j 20] [-t triples] [-i index] <dump directory> <date>.lst` – one
   pass over all parts of a dump (`<date>.lst` of `wdlist`), in threads taking
   parts from a queue (the largest first). For part `NNN` it writes
-  `triples/NNN` (triples, see below) and `index/NNN`, the bz2 blocks of the part
+  `triples/NNN` (triples, see below), `sitelinks/NNN` (for each item with
+  articles in language Wikipedias: uint32 Q, uint16 their number) and `index/NNN`, the bz2 blocks of the part
   with their pages, colon-separated:
 
   ```
@@ -77,9 +80,9 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   target word, item word), each triple once. Input files are memory-mapped; from each one
   a contiguous run (about 1/256 of it) goes to an output file.
 
-- `wddense [-i index] [-o .] <date>.lst` – dense indexes of entities from the
-  block indexes of `wdindex` (no second pass over the dump): `q.idx`, `p.idx`,
-  `l.idx`, see below.
+- `wddense [-i index] [-s sitelinks] [-o .] <date>.lst` – dense indexes of
+  entities from the block indexes of `wdindex` (no second pass over the dump):
+  `q.idx`, `p.idx`, `l.idx`, and `popularity` from `sitelinks/`, see below.
 
 - `wdnames [-j 20] [-i index] [-o .] <date>.lst` – name indexes of items from
   `index/` of `wdindex`: `names`, `names-by-q`, `q-by-name`, see below.
@@ -178,6 +181,15 @@ The search key (`tools/fold.h`, ICU) ignores case and diacritics: case
 folding, NFD without combining marks, and letters that do not decompose by
 hand (Łódź → lodz, Straße → strasse, Ærøskøbing → aeroskobing). Sorting and
 searching must use the same function.
+
+### Popularity
+`popularity`: dense, uint16 per Q, the number of language Wikipedias with an
+article on the item – its sitelinks `<code>wiki` (`plwiki`, `simplewiki`),
+not the other projects ending in `wiki` (`commonswiki`, `specieswiki`,
+`metawiki`, `wikidatawiki`…) nor Wiktionaries, Wikisources and the like. Earth
+has over 300, a typical scholarly article 0. The browser ranks names found by
+it: items with exactly the name searched first, then the others, in both
+groups the most popular first (counting sort: linear, fast for millions).
 
 ### Block index
 `index/NNN` of `wdindex` lists the bz2 blocks of dump part `NNN` and their

@@ -1,15 +1,18 @@
 // wdindex: builds, in one pass over a Wikidata dump, the files from which the
 // indexes are made: entity links (triples) and the pages of every bz2 block.
 //
-// wdindex [-j 20] [-t triples] [-i index] <dump directory> <date>.lst
+// wdindex [-j 20] [-t triples] [-i index] [-s sitelinks] <dump directory> <date>.lst
 //
 // <date>.lst is written by wdlist; its line NNN gives the dump part whose
-// results are triples/NNN and index/NNN. Parts are taken from a queue by the
+// results are triples/NNN, index/NNN and sitelinks/NNN. Parts are taken from a queue by the
 // threads (the largest first); a part is written to NNN.part and renamed when
 // done, so a stopped run continues with the parts not done yet.
 //
 // triples/NNN: for each claim P.. of an item, the main snak's entity value, as
 // 12-byte triples of triples.h: property, item << 2 | rank, target << 2 | type.
+//
+// sitelinks/NNN: for each item with articles in language Wikipedias (claims.h,
+// wikipediaCount), 6 bytes: uint32 Q, uint16 number of Wikipedias.
 //
 // index/NNN: the bz2 blocks of the dump part (each an independent stream of
 // about 100 pages), colon-separated:
@@ -125,7 +128,15 @@ struct Progress {
 };
 
 // One bz2 block (stream) of a part: index lines of its pages, triples of its items
+// A sitelinks record: an item with articles in language Wikipedias
+struct [[gnu::packed]] Sitelinks {
+    uint32_t item;
+    uint16_t wikipedias;
+};
+static_assert(sizeof(Sitelinks) == 6);
+
 void processBlock(const std::string &text, uint64_t offset, std::string &index, std::vector<Triple> &triples,
+                  std::vector<Sitelinks> &sitelinks,
                   Progress &progress) {
     std::vector<std::pair<size_t, std::string>> entries; // start, "symbol:title"
     for (size_t pos = 0;;) {
@@ -152,6 +163,10 @@ void processBlock(const std::string &text, uint64_t offset, std::string &index, 
                 symbol = entity["id"].get<std::string>();
                 title = label(entity);
                 progress.triples += appendTriples(entity, triples);
+                if (symbol.starts_with('Q'))
+                    if (const auto count = wikipediaCount(entity))
+                        sitelinks.push_back({static_cast<uint32_t>(std::stoul(symbol.substr(1))),
+                                             static_cast<uint16_t>(std::min(count, 65535u))});
             }
         }
         entries.emplace_back(start, symbol + ':' + oneLine(title));
@@ -163,6 +178,7 @@ void processBlock(const std::string &text, uint64_t offset, std::string &index, 
 }
 
 void processPart(const Part &part, const fs::path &dumps, const fs::path &triplesDir, const fs::path &indexDir,
+                 const fs::path &sitelinksDir,
                  Progress &progress) {
     const auto name = std::format("{:03}", part.number);
     std::ifstream in(dumps / part.name, std::ios::binary);
@@ -170,11 +186,13 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
         throw std::runtime_error("cannot open " + (dumps / part.name).string());
     std::ofstream triplesOut(triplesDir / (name + ".part"), std::ios::binary);
     std::ofstream indexOut(indexDir / (name + ".part"), std::ios::binary);
+    std::ofstream sitelinksOut(sitelinksDir / (name + ".part"), std::ios::binary);
     indexOut << "# wdindex " << part.name << ": offset:count:uncompressed, then :start:symbol:title per page; EOF=<size>\n";
 
     std::vector<char> buffer(1 << 20), decoded(1 << 22);
     std::string text, index;
     std::vector<Triple> triples;
+    std::vector<Sitelinks> sitelinks;
     bz_stream bz{};
     BZ2_bzDecompressInit(&bz, 0, 0);
     uint64_t read = 0;        // bytes read from the file
@@ -195,7 +213,7 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
         const int status = BZ2_bzDecompress(&bz);
         text.append(decoded.data(), decoded.size() - bz.avail_out);
         if (status == BZ_STREAM_END) {
-            processBlock(text, blockStart, index, triples, progress);
+            processBlock(text, blockStart, index, triples, sitelinks, progress);
             text.clear();
             blockStart = read - bz.avail_in;
             char *rest = bz.next_in;
@@ -223,11 +241,15 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
     indexOut << index << "EOF=" << read << '\n';
     triplesOut.write(reinterpret_cast<const char *>(triples.data()),
                      static_cast<std::streamsize>(triples.size() * sizeof(Triple)));
-    if (!indexOut || !triplesOut)
+    sitelinksOut.write(reinterpret_cast<const char *>(sitelinks.data()),
+                       static_cast<std::streamsize>(sitelinks.size() * sizeof(Sitelinks)));
+    if (!indexOut || !triplesOut || !sitelinksOut)
         throw std::runtime_error(part.name + ": write failed");
     indexOut.close();
     triplesOut.close();
+    sitelinksOut.close();
     fs::rename(triplesDir / (name + ".part"), triplesDir / name);
+    fs::rename(sitelinksDir / (name + ".part"), sitelinksDir / name);
     fs::rename(indexDir / (name + ".part"), indexDir / name);
 }
 
@@ -235,7 +257,7 @@ void processPart(const Part &part, const fs::path &dumps, const fs::path &triple
 
 int main(int argc, char *argv[]) {
     size_t threads = 20;
-    fs::path triplesDir = "triples", indexDir = "index";
+    fs::path triplesDir = "triples", indexDir = "index", sitelinksDir = "sitelinks";
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -245,11 +267,13 @@ int main(int argc, char *argv[]) {
             triplesDir = argv[++i];
         else if (arg == "-i" && i + 1 < argc)
             indexDir = argv[++i];
+        else if (arg == "-s" && i + 1 < argc)
+            sitelinksDir = argv[++i];
         else
             positional.push_back(arg);
     }
     if (positional.size() != 2) {
-        std::cerr << "usage: wdindex [-j 20] [-t triples] [-i index] <dump directory> <date>.lst\n";
+        std::cerr << "usage: wdindex [-j 20] [-t triples] [-i index] [-s sitelinks] <dump directory> <date>.lst\n";
         return 1;
     }
     try {
@@ -257,12 +281,13 @@ int main(int argc, char *argv[]) {
         auto parts = readList(positional[1]);
         fs::create_directories(triplesDir);
         fs::create_directories(indexDir);
+        fs::create_directories(sitelinksDir);
         // Parts done in an earlier run are skipped
         std::vector<Part> todo;
         uint64_t total = 0;
         for (const auto &p : parts) {
             const auto name = std::format("{:03}", p.number);
-            if (fs::exists(triplesDir / name) && fs::exists(indexDir / name))
+            if (fs::exists(triplesDir / name) && fs::exists(indexDir / name) && fs::exists(sitelinksDir / name))
                 continue;
             todo.push_back(p);
             total += p.size;
@@ -284,7 +309,7 @@ int main(int argc, char *argv[]) {
             pool.emplace_back([&] {
                 for (size_t i; (i = next++) < todo.size();) {
                     try {
-                        processPart(todo[i], dumps, triplesDir, indexDir, progress);
+                        processPart(todo[i], dumps, triplesDir, indexDir, sitelinksDir, progress);
                         ++progress.partsDone;
                     } catch (const std::exception &e) {
                         std::lock_guard lock(mutex);

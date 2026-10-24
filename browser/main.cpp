@@ -597,7 +597,7 @@ private:
     QLineEdit *search_;
     std::vector<int> rows_;       // lines of the JSONL file shown (filtered)
     bool found_ = false;          // the list shows names found, not lines
-    std::pair<uint64_t, uint64_t> foundRange_; // in q-by-name
+    std::vector<uint32_t> foundQs_; // items found, in the order shown
     QTabWidget *tabs_;
     // A read-only qcodeedit view with Kate highlighting and folding
     struct CodeView {
@@ -679,7 +679,7 @@ private:
     }
 
     // Names of items starting with the search text: the list shows them all,
-    // read when shown; exact names come first (sorted by the folded name)
+    // names read when shown; exact names first, then the most popular
     void searchNames() {
         const auto text = search_->text().trimmed();
         if (text.isEmpty())
@@ -692,15 +692,17 @@ private:
             go({-1, id});
             return;
         }
-        foundRange_ = entities_.namesStartingWith(text);
-        const auto count = foundRange_.second - foundRange_.first;
+        size_t exact = 0;
         found_ = true;
-        const int rows = static_cast<int>(std::min<uint64_t>(count, INT32_MAX));
+        foundQs_ = entities_.rankedNames(text, exact);
+        const int rows = static_cast<int>(std::min<size_t>(foundQs_.size(), INT32_MAX));
         listModel_->reset(rows, [this](int row) {
-            const auto q = entities_.byName(foundRange_.first + uint64_t(row));
-            return QString("Q%1  %2").arg(q).arg(entities_.itemName(q));
+            const auto q = foundQs_[row];
+            const auto wikipedias = entities_.popularity(q);
+            return QString("Q%1  %2%3").arg(q).arg(entities_.itemName(q))
+                    .arg(wikipedias ? QString("  (%1)").arg(wikipedias) : QString());
         });
-        status_->setText(QString("%L1 names start with \"%2\"").arg(count).arg(text));
+        status_->setText(QString("%L1 names start with \"%2\", %L3 of them exactly").arg(foundQs_.size()).arg(text).arg(exact));
         if (rows > 0)
             list_->setCurrentIndex(listModel_->index(0));
     }
@@ -709,7 +711,7 @@ private:
         if (row < 0)
             return;
         if (found_)
-            go({-1, QString("Q%1").arg(entities_.byName(foundRange_.first + uint64_t(row)))});
+            go({-1, QString("Q%1").arg(foundQs_[size_t(row)])});
         else if (row < static_cast<int>(rows_.size()))
             go({rows_[row], {}});
     }

@@ -33,6 +33,12 @@ public:
     // diacritics ignored, fold.h); the Q of position i is byName(i)
     std::pair<uint64_t, uint64_t> namesStartingWith(const QString &text) const;
     uint32_t byName(uint64_t i) const;
+    // The items whose names start with text, those with exactly that name first,
+    // in both groups the most popular first (popularity of wddense: number of
+    // Wikipedias with an article), else in the order of the names
+    std::vector<uint32_t> rankedNames(const QString &text, size_t &exact) const;
+    // Number of language Wikipedias with an article on Q<number>
+    unsigned popularity(uint32_t number) const;
 
 private:
     struct Entry {
@@ -51,7 +57,9 @@ private:
     qint64 qSize_ = 0, lSize_ = 0;
     QByteArray p_;             // p.idx, small: read whole
     std::string_view nameAt(uint32_t number) const; // UTF-8, from the mapped names
-    std::unique_ptr<QFile> namesFile_, byQFile_, byNameFile_;
+    std::unique_ptr<QFile> namesFile_, byQFile_, byNameFile_, popularityFile_;
+    const uint16_t *popularity_ = nullptr;
+    qint64 popularitySize_ = 0;
     const char *names_ = nullptr;
     const uint32_t *byQ_ = nullptr, *byName_ = nullptr;
     qint64 namesSize_ = 0, byQCount_ = 0, byNameCount_ = 0;
