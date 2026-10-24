@@ -1,16 +1,19 @@
 #pragma once
 // Triples of entity links, 12 bytes as 3 little-endian uint32: property, item
-// with rank, target (always P, Q, Q: links to properties and lexemes are left
-// out). The item's field holds item << 2 | rank: 30 bits for the item number
-// (up to Q1073741823), 2 bits for the statement's rank, in the low bits so that
-// sorting by the field sorts by item.
-// (31, 56782 << 2 | normal, 34770): Q56782 instance of (P31) Q34770.
+// with rank, target with type. The item is always a Q (the claims of
+// properties and lexemes go to their own JSONL). Both other words hold a
+// 30-bit number and 2 bits in the low bits, so that sorting by the word sorts
+// by the number:
+//   item word    Q << 2 | rank   (rank: 0 deprecated, 1 normal, 2 preferred)
+//   target word  N << 2 | type   (type: 0 item Q, 1 property P, 2 lexeme L)
+// 30 bits reach 1073741823 (today Q is about 140 million).
+// (31, 56782 << 2 | normal, 34770 << 2 | item): Q56782 instance of (P31) Q34770.
 //
 // Sorted for the reverse lookup ("all items with P106 = Q36180, writer") by
-// (bit-reversed property, target, item, rank). Bit reversal puts property % 256
-// in the top 8 bits, so the triples of property % 256 = k are one contiguous
-// run of a sorted file: the indexes are split into 256 files by property
-// modulo, whatever the number of properties.
+// (bit-reversed property, target word, item word). Bit reversal puts
+// property % 256 in the top 8 bits, so the triples of property % 256 = k are
+// one contiguous run of a sorted file: the indexes are split into 256 files by
+// property modulo, whatever the number of properties.
 #include <bit>
 #include <chrono>
 #include <cstdint>
@@ -22,19 +25,24 @@
 // there are any, else the normal ones; deprecated ones are wrong values kept
 enum class Rank : uint8_t { deprecated = 0, normal = 1, preferred = 2 };
 
+// Type of the target entity
+enum class TargetType : uint8_t { item = 0, property = 1, lexeme = 2 };
+
 struct Triple {
     uint32_t property;
-    uint32_t itemRank; // item << 2 | rank
-    uint32_t target;
+    uint32_t itemRank;   // item << 2 | rank
+    uint32_t targetType; // target << 2 | type
 
-    static constexpr uint32_t maxItem = (1u << 30) - 1;
-    static Triple make(uint32_t property, uint32_t item, Rank rank, uint32_t target) {
-        if (item > maxItem)
-            throw std::runtime_error(std::format("Q{} does not fit in 30 bits", item));
-        return {property, item << 2 | static_cast<uint32_t>(rank), target};
+    static constexpr uint32_t maxNumber = (1u << 30) - 1;
+    static Triple make(uint32_t property, uint32_t item, Rank rank, uint32_t target, TargetType type) {
+        if (item > maxNumber || target > maxNumber)
+            throw std::runtime_error(std::format("Q{} or target {} does not fit in 30 bits", item, target));
+        return {property, item << 2 | static_cast<uint32_t>(rank), target << 2 | static_cast<uint32_t>(type)};
     }
     uint32_t item() const { return itemRank >> 2; }
     Rank rank() const { return static_cast<Rank>(itemRank & 3); }
+    uint32_t target() const { return targetType >> 2; }
+    TargetType type() const { return static_cast<TargetType>(targetType & 3); }
 };
 static_assert(sizeof(Triple) == 12);
 
@@ -50,18 +58,18 @@ static_assert(reverseBits(1) == 0x80000000u && reverseBits(0x80000000u) == 1 && 
 // Index file of a triple: property % 256
 constexpr uint32_t bucketOf(uint32_t property) { return property & 0xFF; }
 
-// Order of sorted triples: bit-reversed property, target, item, rank
+// Order of sorted triples: bit-reversed property, target word, item word
 inline bool operator<(const Triple &a, const Triple &b) {
     const auto ra = reverseBits(a.property), rb = reverseBits(b.property);
     if (ra != rb)
         return ra < rb;
-    if (a.target != b.target)
-        return a.target < b.target;
+    if (a.targetType != b.targetType)
+        return a.targetType < b.targetType;
     return a.itemRank < b.itemRank;
 }
 
 inline bool operator==(const Triple &a, const Triple &b) {
-    return a.property == b.property && a.itemRank == b.itemRank && a.target == b.target;
+    return a.property == b.property && a.itemRank == b.itemRank && a.targetType == b.targetType;
 }
 
 inline std::string duration(double seconds) {

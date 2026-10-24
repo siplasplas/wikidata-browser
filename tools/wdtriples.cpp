@@ -1,6 +1,7 @@
 // wdtriples: links between Wikidata items from the start of a dump part, as
-// 12-byte triples (triples.h): property, item << 2 | rank, target, e.g.
-// (31, 56782 << 2 | normal, 34770) for "Q56782 instance of (P31) Q34770".
+// 12-byte triples (triples.h): property, item << 2 | rank, target << 2 | type,
+// e.g. (31, 56782 << 2 | normal, 34770 << 2 | item) for "Q56782 instance of
+// (P31) Q34770".
 //
 // wdtriples [--limit MB] [-o triples.bin] dump.xml.bz2
 //
@@ -170,9 +171,10 @@ int main(int argc, char *argv[]) {
             triples.clear();
             size_t other = 0;
             appendTriples(entity, triples, &other);
-            stats.targetTypes["property or lexeme, left out"] += other;
+            stats.targetTypes["form, sense or schema, left out"] += other;
             for (const auto &t : triples) {
                 ++stats.triples;
+                ++stats.targetTypes[t.type() == TargetType::item ? "item" : t.type() == TargetType::property ? "property" : "lexeme"];
                 ++stats.ranks[t.rank() == Rank::preferred ? "preferred" : t.rank() == Rank::deprecated ? "deprecated" : "normal"];
             }
             if (out)
@@ -259,7 +261,7 @@ int main(int argc, char *argv[]) {
               << "statements:        " << stats.statements << "\n"
               << "triples:           " << stats.triples << " = " << stats.triples * sizeof(Triple) << " bytes ("
               << double(stats.triples) / std::max<uint64_t>(1, stats.items) << " per item)\n"
-              << "other targets:    ";
+              << "target types:     ";
     for (const auto &[type, count] : stats.targetTypes)
         std::cout << " " << type << " " << count;
     for (const auto &title : stats.oddIds)

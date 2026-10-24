@@ -68,13 +68,13 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
-  `wdindex` by (bit-reversed property, target, item, rank), leaves out repeated
+  `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
   files from a queue, the largest first; `NNN.part` is renamed when done.
 - `wdmerge [-j 20] [sort-triples [triple-index]]` – merges the sorted files into
   256 index files `triple-index/000` … `255`: file `NNN` holds the triples of
   all parts with property % 256 = `NNN`, sorted by (bit-reversed property,
-  target, item, rank), each triple once. Input files are memory-mapped; from each one
+  target word, item word), each triple once. Input files are memory-mapped; from each one
   a contiguous run (about 1/256 of it) goes to an output file.
 
 - `wddense [-i index] [-o .] <date>.lst` – dense indexes of entities from the
@@ -98,22 +98,25 @@ and `wdindex` takes about 5 hours instead of 1.
 
 ### Triples
 A triple has 12 bytes, 3 little-endian uint32 (`tools/triples.h`): property,
-item with rank, target – always P, Q, Q: only claims whose main snak's value is
-an item (`datavalue.value` with entity-type `item` and `numeric-id`) give
-triples, about 40–60% of all claims; values that are properties or lexemes
-(about 0.03%) are left out.
+item with rank, target with type. The item is always a Q (claims of properties
+and lexemes go to their own JSONL). Only claims whose main snak's value is an
+entity with a `numeric-id` (item, property, lexeme) give triples, about 40–60%
+of all claims; forms, senses and entity schemas (ids like `L7-F2`) are left
+out.
 
-| bytes | field | |
+| bytes | word | |
 |---|---|---|
 | 0–3 | property | 31 for P31 |
-| 4–7 | item << 2 \| rank | 30 bits for the item (up to Q1073741823), 2 bits for the rank: 0 deprecated, 1 normal, 2 preferred |
-| 8–11 | target | the item it points to |
+| 4–7 | item << 2 \| rank | 30 bits for the item, 2 bits rank: 0 deprecated, 1 normal, 2 preferred |
+| 8–11 | target << 2 \| type | 30 bits for the target, 2 bits type: 0 item (Q), 1 property (P), 2 lexeme (L) |
 
-The rank is in the low bits so that sorting by the field sorts by item.
-(31, 56782 << 2 | 1, 34770) is "Q56782 instance of (P31) Q34770", rank normal.
-The "truthy" values of a property are its preferred ones if there are any,
-else its normal ones; deprecated values are wrong ones kept (with a reason,
-P2241). In a sample about 99.8% are normal.
+The 2 bits are the low ones, so that sorting by a word sorts by its number; 30
+bits reach 1073741823 (today Q is about 140 million). (31, 56782 << 2 | 1,
+34770 << 2 | 0) is "Q56782 instance of (P31) Q34770", rank normal. Targets of
+items are almost all Q (in a sample: 256785 Q, 8 P, 6 L). The "truthy" values
+of a property are its preferred ones if there are any, else its normal ones;
+deprecated values are wrong ones kept (with a reason, P2241). In a sample about
+99.8% are normal.
 
 ### Splitting by property modulo
 The index is split into files by property % 256, not by property ranges, so the
@@ -135,8 +138,8 @@ search, and `wdmerge` merges these runs. The same works for any power of two:
 
 ### Lookup
 "All items with occupation (P106) writer (Q36180)": file `triple-index/106`
-(106 % 256), binary search for (reverse(106), 36180): the items of the run are
-the answer, in increasing order, with the rank of each statement.
+(106 % 256), binary search for (reverse(106), 36180 << 2 | item): the items of
+the run are the answer, in increasing order, with the rank of each statement.
 
 ### Dense indexes of entities
 Numbers of entities are dense, so the entry of Q*N* is at byte N × 12 of

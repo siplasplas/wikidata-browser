@@ -9,7 +9,7 @@
 // done, so a stopped run continues with the parts not done yet.
 //
 // triples/NNN: for each claim P.. of an item, the main snak's entity value, as
-// 12-byte triples of triples.h: property, item << 2 | rank, target.
+// 12-byte triples of triples.h: property, item << 2 | rank, target << 2 | type.
 //
 // index/NNN: the bz2 blocks of the dump part (each an independent stream of
 // about 100 pages), colon-separated:
