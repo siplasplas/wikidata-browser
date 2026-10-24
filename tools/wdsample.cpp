@@ -1,7 +1,7 @@
 // wdsample: what a slimmer Wikidata would take, measured on a random sample of
 // whole bz2 streams (about 100 pages each) of all dump parts.
 //
-// wdsample [-j 20] [--percent 3] [--seed 1] <dump directory> <date>.lst <Wikimedia index directory>
+// wdsample [-j 20] [--percent 3] [--seed 1] [--levels 3,9,15,19] <dump directory> <date>.lst <Wikimedia index directory>
 //
 // The offsets of the streams come from the dump's own indexes
 // (wikidatawiki-<date>-pages-articles-multistream-index<N>.txt-<range>.bz2,
@@ -29,6 +29,7 @@
 #include <mutex>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -150,7 +151,13 @@ struct Totals {
     // zstd (level 3, level 3 + dictionary, level 19 + dictionary) of frames of about
     // 64 KiB, 256 KiB, 512 KiB, 1 MiB of items with references; and 512 KiB without
     uint64_t zData[4][3] = {}, zSlim[3] = {}, frames[4] = {};
+    // --levels: frames of 512 KiB with references, with a dictionary, per level: bytes, seconds
+    std::map<int, std::pair<uint64_t, double>> levels;
     void add(const Totals &o) {
+        for (const auto &[l, bt] : o.levels) {
+            levels[l].first += bt.first;
+            levels[l].second += bt.second;
+        }
         kept += o.kept, refsRaw += o.refsRaw;
         for (int i = 0; i < 4; ++i) {
             k[i] += o.k[i], frames[i] += o.frames[i];
@@ -188,6 +195,9 @@ struct Compressor {
     std::string out;
     Series data[4] = {{64 << 10}, {256 << 10}, {512 << 10}, {1 << 20}}; // items with references
     Series slim{512 << 10};                                               // items without references
+    std::vector<std::pair<int, const ZSTD_CDict *>> levelDicts;          // --levels
+    std::map<int, std::pair<uint64_t, double>> levelSizes;
+    std::string sweep;                                                    // the frame for --levels
     std::vector<std::string> *dataSamples = nullptr, *slimSamples = nullptr; // training
     ~Compressor() { ZSTD_freeCCtx(ctx); }
     void compress(Series &series, const ZSTD_CDict *dict3, const ZSTD_CDict *dict19) {
@@ -215,6 +225,23 @@ struct Compressor {
         slim.frame += '\n';
         if (slim.frame.size() >= slim.target)
             compress(slim, slimDict3, slimDict19);
+        if (!levelDicts.empty()) {
+            sweep += withReferences;
+            sweep += '\n';
+            if (sweep.size() >= (512u << 10))
+                compressLevels();
+        }
+    }
+    void compressLevels() {
+        out.resize(ZSTD_compressBound(sweep.size()));
+        for (const auto &[level, dict] : levelDicts) {
+            const auto start = std::chrono::steady_clock::now();
+            const auto size = ZSTD_compress_usingCDict(ctx, out.data(), out.size(), sweep.data(), sweep.size(), dict);
+            auto &ls = levelSizes[level];
+            ls.first += size;
+            ls.second += secondsSince(start);
+        }
+        sweep.clear();
     }
     // The last frames, and the sizes into t
     void finish(Totals &t) {
@@ -231,6 +258,12 @@ struct Compressor {
             compress(slim, slimDict3, slimDict19);
         for (int j = 0; j < 3; ++j)
             t.zSlim[j] += slim.z[j];
+        if (!sweep.empty())
+            compressLevels();
+        for (const auto &[l, bt] : levelSizes) {
+            t.levels[l].first += bt.first;
+            t.levels[l].second += bt.second;
+        }
     }
 };
 
@@ -370,6 +403,7 @@ int main(int argc, char *argv[]) {
     size_t threads = 20;
     double percent = 3;
     unsigned seed = 1;
+    std::vector<int> levels; // --levels 3,9,15,17,19
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -377,13 +411,17 @@ int main(int argc, char *argv[]) {
             threads = std::max(1, std::stoi(argv[++i]));
         else if (arg == "--percent" && i + 1 < argc)
             percent = std::stod(argv[++i]);
-        else if (arg == "--seed" && i + 1 < argc)
+        else if (arg == "--levels" && i + 1 < argc) {
+            std::stringstream list(argv[++i]);
+            for (std::string level; std::getline(list, level, ',');)
+                levels.push_back(std::stoi(level));
+        } else if (arg == "--seed" && i + 1 < argc)
             seed = static_cast<unsigned>(std::stoul(argv[++i]));
         else
             positional.push_back(arg);
     }
     if (positional.size() != 3) {
-        std::cerr << "usage: wdsample [-j 20] [--percent 3] [--seed 1] <dump directory> <date>.lst <Wikimedia index directory>\n";
+        std::cerr << "usage: wdsample [-j 20] [--percent 3] [--seed 1] [--levels 3,9,15,19] <dump directory> <date>.lst <Wikimedia index directory>\n";
         return 1;
     }
     try {
@@ -468,6 +506,9 @@ int main(int argc, char *argv[]) {
                                 ZSTD_createCDict(dataDictionary.data(), dataDictionary.size(), 19),
                                 ZSTD_createCDict(slimDictionary.data(), slimDictionary.size(), 3),
                                 ZSTD_createCDict(slimDictionary.data(), slimDictionary.size(), 19)};
+        std::vector<std::pair<int, const ZSTD_CDict *>> levelDicts;
+        for (const int level : levels)
+            levelDicts.emplace_back(level, ZSTD_createCDict(dataDictionary.data(), dataDictionary.size(), level));
         std::cout << std::format("dictionaries: {} B with references, {} B without ({})", dataDictionary.size(),
                                  slimDictionary.size(), duration(secondsSince(started)))
                   << std::endl;
@@ -480,6 +521,7 @@ int main(int argc, char *argv[]) {
                 Totals mine;
                 Compressor z;
                 z.dataDict3 = dicts[0], z.dataDict19 = dicts[1], z.slimDict3 = dicts[2], z.slimDict19 = dicts[3];
+                z.levelDicts = levelDicts;
                 for (size_t i; (i = next++) < jobs.size();) {
                     const auto &job = jobs[i];
                     const auto text = stream(dumps / parts[job.part], job.offset, job.length);
@@ -537,8 +579,17 @@ int main(int argc, char *argv[]) {
         std::cout << std::format("  without references, 512 KiB                         {:7.1f}  {:7.1f}  {:7.1f} GB\n",
                                  totals.zSlim[0] * scale / 1e9, totals.zSlim[1] * scale / 1e9, totals.zSlim[2] * scale / 1e9)
                   << "done in " << duration(secondsSince(started)) << std::endl;
+        if (!totals.levels.empty()) {
+            std::cout << "zstd levels, frames of 512 KiB with references and a dictionary: size, compression time\n"
+                         "(time: of the whole dump, in threads; level 3 is about the speed of the dump's decompression)\n";
+            for (const auto &[level, bt] : totals.levels)
+                std::cout << std::format("  level {:2}  {:6.1f} GB  {}\n", level, bt.first * scale / 1e9,
+                                         duration(bt.second * scale / threads));
+        }
         for (auto *d : dicts)
             ZSTD_freeCDict(d);
+        for (auto &[l, d] : levelDicts)
+            ZSTD_freeCDict(const_cast<ZSTD_CDict *>(d));
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         return 1;

@@ -85,7 +85,9 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   kept (all but scholarly articles in no Wikipedia), compressed with zstd in
   frames of about 64 KiB, 256 KiB, 512 KiB and 1 MiB uncompressed, with
   references (and without, at 512 KiB), level 3, level 3 and level 19 with a
-  dictionary trained on the sample; scaled to the whole dump.
+  dictionary trained on the sample; scaled to the whole dump. `--levels
+  3,9,15,19` also compares zstd levels (512 KiB frames, dictionary): size and
+  compression time.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
   `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
@@ -228,9 +230,13 @@ end of the file) have count 0, so a block's compressed length is always the
 next offset (or `EOF`) minus its own offset.
 
 ## Planned formats of entities
-- Items (Q): the JSON of the dump, slimmed, in zstd frames (independent, like
-  the bz2 streams of the dump; about 10 entities or 1 MB each, with a trained
-  dictionary so that small frames compress well). Each converted file `NNN`
+- Items (Q): the JSON of the dump, slimmed, references kept, in zstd frames
+  (independent, like the bz2 streams of the dump) of about 512 KiB
+  uncompressed (about 80 items), level 9 with a dictionary trained on the
+  data: about 19 GB for the items kept (sample of 3%: 1 MiB frames 17.5,
+  64 KiB 23.2 GB at level 19; references cost about 3 GB; level 9 19.3 GB,
+  level 19 18.0 GB, but level 9 adds about 2 minutes to the conversion and
+  level 19 about an hour). Each converted file `NNN`
   has an index of its frames, with only the ids of the entities (names and
   other data are for the indexes of the tools, such as `index/` of wdindex):
 
