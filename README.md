@@ -217,8 +217,23 @@ next offset (or `EOF`) minus its own offset.
 ## Planned formats of entities
 - Items (Q): the JSON of the dump, slimmed, in zstd frames (independent, like
   the bz2 streams of the dump; about 10 entities or 1 MB each, with a trained
-  dictionary so that small frames compress well), with an index of frames as
-  `index/NNN`. A binary format was considered: simple for values that are
+  dictionary so that small frames compress well). Each converted file `NNN`
+  has an index of its frames, with only the ids of the entities (names and
+  other data are for the indexes of the tools, such as `index/` of wdindex):
+
+  ```
+  # wdconvert index: offset:count:uncompressed, then :start:id per entry; EOF=<size>
+  0:100:412345            frame: offset in the file, entities, size uncompressed
+  :0:Q315                 entity: start in the uncompressed frame, id
+  :3785:P31
+  38211:67:328120
+  :0:Q54254
+  EOF=5123456             size of the file
+  ```
+
+  As `index/NNN`: an entity ends where the next one starts, the last at the
+  frame's size; a frame's compressed length is the next offset (or `EOF`)
+  minus its own. A binary format was considered: simple for values that are
   entities (about 90% of claims), but dates, quantities, coordinates and
   monolingual texts each need an encoding of their own.
 - Left out entirely: hashes of snaks and references, statement ids
