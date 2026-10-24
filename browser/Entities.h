@@ -28,6 +28,8 @@ public:
     bool hasSlim() const { return !slimDir_.isEmpty(); }
     // Where the last entity of json() came from: "slim" or "dump"
     QString lastSource() const { return lastSource_; }
+    // The id the last json() was redirected to (a merged entity), else empty
+    QString lastRedirect() const { return lastRedirect_; }
 
     // English label of P<number> from p.idx, empty when unknown
     QString propertyName(uint32_t number) const;
@@ -73,7 +75,13 @@ private:
         qint64 size = 0;
         std::unique_ptr<ZSTD_DDict, DDictFree> dict;
     };
-    QString slimDir_, lastSource_;
+    QString slimDir_, lastSource_, lastRedirect_;
+    // Redirects of merged entities (slim/redirects/NNN, "Q1:Q2"), read when first needed:
+    // (kind << 32 | number) of the old id and of the new one, sorted
+    std::vector<std::pair<uint64_t, uint64_t>> redirects_;
+    bool redirectsRead_ = false;
+    QString redirectOf(const QString &id);
+    QByteArray read(const QString &id, QString &error); // without redirects
     SlimKind slim_[3]; // items, properties, lexemes
     QString cachedFramePath_;
     uint64_t cachedFrameOffset_ = 0;

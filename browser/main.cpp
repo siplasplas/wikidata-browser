@@ -468,6 +468,8 @@ private:
                 return false;
             }
             title = location.entity;
+            if (const auto target = entities_.lastRedirect(); !target.isEmpty())
+                title = location.entity + " → " + target;
         } else {
             if (!lines_ || location.line < 0 || location.line >= static_cast<int>(lines_->count()))
                 return false;
@@ -484,9 +486,14 @@ private:
         currentTitle_ = titleOf(raw);
         if (currentTitle_.isEmpty())
             currentTitle_ = title;
+        else if (!location.entity.isEmpty() && !entities_.lastRedirect().isEmpty())
+            currentTitle_ = location.entity + " → " + currentTitle_; // merged: old id → new id and label
         setWindowTitle(currentTitle_ + (location.entity.isEmpty() ? " — " + path_ : QString()) + " — wdbrowse");
         statusBar()->showMessage(location.entity.isEmpty() ? QString("line %1").arg(location.line + 1)
-                                                           : location.entity + " from the " + entities_.lastSource());
+                                                           : (entities_.lastRedirect().isEmpty()
+                                                                      ? location.entity
+                                                                      : location.entity + " → merged into " + entities_.lastRedirect()) +
+                                                                     " from the " + entities_.lastSource());
         fillTree();
         return true;
     }

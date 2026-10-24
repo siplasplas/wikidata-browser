@@ -35,7 +35,10 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   (`slim/`: `items/`, `q.idx`…, `items.dict`…), kept in `wdbrowse.ini` next to
   the binary. Entities are read from the slim files first (one zstd frame of
   about 512 KiB: under a millisecond), from the dump when they are not there
-  (items left out, about 30 ms); the status bar tells which.
+  (items left out, about 30 ms); the status bar tells which. A merged entity
+  (its page a redirect; `slim/redirects/`, about 5 million, read when first
+  needed) opens the one it was merged into: "Q114496635 → merged into
+  Q7024157", also through chains of redirects.
 
 ## Tools
 - `wdlist [directory]` (default `.`) – finds the dump parts

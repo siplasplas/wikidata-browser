@@ -292,7 +292,73 @@ QByteArray Entities::frame(const QString &path, uint64_t offset, const ZSTD_DDic
     return text;
 }
 
+namespace {
+
+// (kind << 32 | number) of an id: Q 0, P 1, L 2; ~0 for no id
+uint64_t keyOf(QStringView id) {
+    if (id.size() < 2)
+        return ~0ull;
+    const int kind = id[0] == 'Q' ? 0 : id[0] == 'P' ? 1 : id[0] == 'L' ? 2 : -1;
+    bool ok = false;
+    const auto number = id.mid(1).toUInt(&ok);
+    return kind < 0 || !ok ? ~0ull : uint64_t(kind) << 32 | number;
+}
+
+QString idOf(uint64_t key) {
+    return QString("%1%2").arg(QChar("QPL"[key >> 32])).arg(uint32_t(key));
+}
+
+} // namespace
+
+QString Entities::redirectOf(const QString &id) {
+    if (!redirectsRead_) {
+        redirectsRead_ = true;
+        if (hasSlim()) {
+            QDir dir(QDir(slimDir_).filePath("redirects"));
+            for (const auto &name : dir.entryList(QDir::Files, QDir::Name)) {
+                QFile file(dir.filePath(name));
+                if (!file.open(QIODevice::ReadOnly))
+                    continue;
+                const auto text = file.readAll();
+                for (const auto &line : text.split('\n')) {
+                    const auto colon = line.indexOf(':');
+                    if (colon < 0)
+                        continue;
+                    const auto from = keyOf(QString::fromLatin1(line.left(colon))),
+                               to = keyOf(QString::fromLatin1(line.mid(colon + 1)));
+                    if (from != ~0ull && to != ~0ull)
+                        redirects_.emplace_back(from, to);
+                }
+            }
+            std::ranges::sort(redirects_);
+        }
+    }
+    const auto key = keyOf(id);
+    const auto it = std::ranges::lower_bound(redirects_, std::pair{key, uint64_t(0)});
+    return it != redirects_.end() && it->first == key ? idOf(it->second) : QString();
+}
+
+// The entity, or the one it was merged into (chains of redirects followed)
 QByteArray Entities::json(const QString &id, QString &error) {
+    lastRedirect_.clear();
+    auto result = read(id, error);
+    QString current = id.trimmed().toUpper();
+    for (int step = 0; result.isEmpty() && step < 5; ++step) {
+        const auto target = redirectOf(current);
+        if (target.isEmpty())
+            break;
+        current = target;
+        QString ignored;
+        result = read(current, ignored);
+        if (!result.isEmpty()) {
+            lastRedirect_ = current;
+            error.clear();
+        }
+    }
+    return result;
+}
+
+QByteArray Entities::read(const QString &id, QString &error) {
     static const QRegularExpression pattern("^([QPL])(\\d+)$");
     const auto match = pattern.match(id.trimmed().toUpper());
     if (!match.hasMatch()) {
