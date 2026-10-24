@@ -212,7 +212,8 @@ int main(int argc, char *argv[]) {
                                      count ? count - 1 : 0, (4 + count * 16.0 + names.size()) / 1e6)
                       << std::endl;
         }
-        std::cout << other << " other pages (redirects, not entities) left out" << std::endl;
+        if (slimDir.empty())
+            std::cout << other << " other pages (redirects, not entities) left out" << std::endl;
         // Popularity: Wikipedias per item
         if (!sitelinksDir.empty() && fs::is_directory(sitelinksDir)) {
             std::vector<uint16_t> popularity(q.entries.size(), 0);
@@ -239,7 +240,7 @@ int main(int argc, char *argv[]) {
                 throw std::runtime_error("cannot write " + name.string());
             std::cout << std::format("{}: {} items in Wikipedias, {:.1f} MB", name.string(), items, popularity.size() * 2 / 1e6)
                       << std::endl;
-        } else
+        } else if (!sitelinksDir.empty())
             std::cout << "no " << sitelinksDir.string() << "/: no popularity" << std::endl;
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
