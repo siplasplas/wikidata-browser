@@ -215,13 +215,23 @@ end of the file) have count 0, so a block's compressed length is always the
 next offset (or `EOF`) minus its own offset.
 
 ## Planned formats of entities
-- Items (Q, over 100 million): a binary format, fields of whole bytes (enums
-  such as rank or entity type are one byte each), compressed in bz2 blocks.
+- Items (Q): the JSON of the dump, slimmed, in zstd frames (independent, like
+  the bz2 streams of the dump; about 10 entities or 1 MB each, with a trained
+  dictionary so that small frames compress well), with an index of frames as
+  `index/NNN`. A binary format was considered: simple for values that are
+  entities (about 90% of claims), but dates, quantities, coordinates and
+  monolingual texts each need an encoding of their own.
+- Left out entirely: hashes of snaks and references, statement ids
+  (`Q42$…`), lexeme counters `nextFormId`, `nextSenseId` – for editing only.
+- References: to a separate zstd file, one line per item in the shape of its
+  claims: `{"id":"Q42","references":{"P569":[[ref, ref], []]}}` – the
+  references of statement *i* of a property are its element *i*.
+- Scholarly articles (P31 = Q13442814) in no Wikipedia are left out: about two
+  thirds of the JSON of all items (first sample). Their names stay in `names`,
+  so links to them still show a name; the full entity is in the original dump.
 - Properties (P, about 14 thousand) and lexemes (L, about 1.7 million): JSONL,
-  one entity per line. Lexemes differ much from items and from each other
-  (forms and senses with ids like `L7-F2`, `L7-S1`, their own claims; values
-  pointing to lexemes, forms and senses), properties are few: neither is worth
-  a binary format.
-- Not needed for browsing and left out: statement ids and snak hashes (for
-  editing only), lexeme counters `nextFormId` and `nextSenseId` (ids of
-  deleted forms and senses are never reused, so they are no count).
+  slimmed the same way.
+- Sizes (sample of 0.05%, scaled; wdsample --percent 3 to confirm): uncompressed
+  XML 3.5 TB, items' JSON 1.93 TB, without hashes 1.56 TB, and without
+  statement ids 1.46 TB, and without references 0.71 TB; items in no Wikipedia
+  76% of items and 1.65 TB, of it scholarly articles 1.32 TB.
