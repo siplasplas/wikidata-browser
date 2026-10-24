@@ -45,7 +45,7 @@ add_executable(wddense tools/wddense.cpp)
 find_package(ICU REQUIRED COMPONENTS uc)
 # wdnames: names, names-by-q, q-by-name (search by name) from index/ of wdindex
 add_executable(wdnames tools/wdnames.cpp tools/fold.h)
-target_link_libraries(wdnames ICU::uc)
+target_link_libraries(wdnames ICU::uc nlohmann_json::nlohmann_json PkgConfig::ZSTD)
 
 # wdbrowse: the browser (Qt6). The tools above need no Qt; -DWDB_BROWSER=OFF builds only them.
 option(WDB_BROWSER "Build the browser wdbrowse (Qt6, qcodeedit, qt-extra)" ON)

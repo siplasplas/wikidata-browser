@@ -80,3 +80,24 @@ inline unsigned wikipediaCount(const nlohmann::json &entity) {
             ++count;
     return count;
 }
+
+// The name of an entity: its English label, else the label for many languages
+// ("mul": Wikidata keeps one label for names the same in many languages, such
+// as "Donald Trump", and then often no "en"), else the first; lexemes: their
+// lemma the same way. "en" first: where both differ, "mul" is often a
+// catalogue name (Earth: "Sol 3", a star: "V* DX Vir").
+inline std::string entityLabel(const nlohmann::json &entity) {
+    for (const char *key : {"labels", "lemmas"}) {
+        const auto it = entity.find(key);
+        if (it == entity.end() || !it->is_object() || it->empty())
+            continue;
+        auto chosen = it->find("en");
+        if (chosen == it->end())
+            chosen = it->find("mul");
+        if (chosen == it->end())
+            chosen = it->begin();
+        if (chosen->is_object() && chosen->contains("value") && (*chosen)["value"].is_string())
+            return (*chosen)["value"].get<std::string>();
+    }
+    return "";
+}

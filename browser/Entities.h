@@ -52,6 +52,13 @@ public:
     // Number of language Wikipedias with an article on Q<number>
     unsigned popularity(uint32_t number) const;
 
+    // What points to an entity (target-counts/ of wdcount, in the index
+    // directory): property and number of items, the most first
+    std::vector<std::pair<uint32_t, uint32_t>> linksTo(const QString &id);
+    // The items with property = target (triple-index-slim/ of wdfilter;
+    // statements not deprecated), the most popular first
+    std::vector<uint32_t> itemsWith(uint32_t property, const QString &target);
+
 private:
     struct Entry {
         uint16_t part = 0;
@@ -75,7 +82,17 @@ private:
         qint64 size = 0;
         std::unique_ptr<ZSTD_DDict, DDictFree> dict;
     };
-    QString slimDir_, lastSource_, lastRedirect_;
+    QString slimDir_, lastSource_, lastRedirect_, indexDir_;
+    // Files of target-counts/ and triple-index-slim/, mapped when first needed
+    struct Mapped {
+        std::unique_ptr<QFile> file;
+        const uchar *data = nullptr;
+        qint64 size = 0;
+        bool tried = false;
+    };
+    Mapped counts_[256], triples_[256];
+    const Mapped &mapped(Mapped (&files)[256], const char *dir, uint32_t bucket);
+    void rankByPopularity(std::vector<uint32_t> &items) const;
     // Redirects of merged entities (slim/redirects/NNN, "Q1:Q2"), read when first needed:
     // (kind << 32 | number) of the old id and of the new one, sorted
     std::vector<std::pair<uint64_t, uint64_t>> redirects_;

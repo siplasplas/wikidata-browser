@@ -76,7 +76,7 @@ public:
     [[nodiscard]] virtual QByteArray line(size_t i) = 0;
 };
 
-// "id" with the English label (Q1084 noun), or "title"
+// "id" with the English label, else the "mul" one (Q1084 noun), or "title"
 QString titleOf(const QByteArray &line) {
     auto value = [&](const char *key) -> QString {
         int at = line.indexOf(key);
@@ -88,8 +88,12 @@ QString titleOf(const QByteArray &line) {
     QString id = value("\"id\":\"");
     if (id.isEmpty())
         return value("\"title\":\"");
-    if (auto english = value("\"en\":{\"language\":\"en\",\"value\":\""); !english.isEmpty())
-        id += "  " + english;
+    // The English label, else the one for many languages (mul)
+    auto name = value("\"en\":{\"language\":\"en\",\"value\":\"");
+    if (name.isEmpty())
+        name = value("\"mul\":{\"language\":\"mul\",\"value\":\"");
+    if (!name.isEmpty())
+        id += "  " + name;
     return id;
 }
 

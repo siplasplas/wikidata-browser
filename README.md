@@ -124,8 +124,11 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   of the entity's kind; no names, no popularity: those of the dump's indexes
   serve).
 
-- `wdnames [-j 20] [-i index] [-o .] <date>.lst` – name indexes of items from
-  `index/` of `wdindex`: `names`, `names-by-q`, `q-by-name`, see below.
+- `wdnames [-j 20] [-i index] [--slim slim] [-o .] <date>.lst` – name indexes
+  of items from `index/` of `wdindex`: `names`, `names-by-q`, `q-by-name`, see
+  below. `--slim`: the names of the items of the slim files from their labels
+  (only the `labels` object of each line is parsed; minutes), the items left
+  out keep those of `index/`.
 
 ## Building the reverse index of entity links
 
@@ -223,7 +226,11 @@ then the names, UTF-8, each ended by `\0`. Sizes: about 1.7 GB for Q (up to
 Q~140 million), 20 MB for L, under 1 MB for P.
 
 ### Names of items
-The name of an item is its English label, else the first one: one name per
+The name of an item is its English label, else its label for many languages
+(`mul`: Wikidata keeps one label for names the same in many languages, such as
+"Donald Trump", and then often no `en` – in some parts nearly all items), else
+the first one; `en` comes first because where both differ `mul` is often a
+catalogue name (Earth: "Sol 3"). One name per
 item, not all labels, so the index does not repeat Wikidata. The names of all
 items take 6.4 GB (121.8 million items, 52 bytes on average – titles of
 scholarly articles and chemical names are long), so 4-byte offsets to bytes

@@ -21,8 +21,8 @@
 //   :start:symbol:title            a page: its start in the uncompressed block
 //                                  (it ends where the next one starts, the last
 //                                  at uncompressed), entity id (Q42, P31, L7) or
-//                                  "other", English label (lexemes: lemma), else
-//                                  the first one; "other": the page title
+//                                  "other", English label, else "mul" (lexemes:
+//                                  lemma), else the first; "other": the page title
 //   EOF=<size>                     the size of the .bz2
 // Blocks without pages (siteinfo at the start, </mediawiki> at the end) have
 // count 0.
@@ -101,20 +101,6 @@ std::string unescape(std::string_view s) {
     return out;
 }
 
-// English value of labels or lemmas ({"en": {"language": "en", "value": ...}}), else the first
-std::string label(const json &entity) {
-    for (const char *key : {"labels", "lemmas"}) {
-        const auto it = entity.find(key);
-        if (it == entity.end() || !it->is_object() || it->empty())
-            continue;
-        const auto en = it->find("en");
-        const auto &chosen = en != it->end() ? *en : it->begin().value();
-        if (chosen.is_object() && chosen.contains("value") && chosen["value"].is_string())
-            return chosen["value"].get<std::string>();
-    }
-    return "";
-}
-
 // No line breaks in an index line
 std::string oneLine(std::string s) {
     std::ranges::replace(s, '\n', ' ');
@@ -161,7 +147,7 @@ void processBlock(const std::string &text, uint64_t offset, std::string &index, 
             auto entity = json::parse(unescape(body.substr(content + 1, close - content - 1)), nullptr, false);
             if (!entity.is_discarded() && entity.is_object() && entity.contains("id") && entity["id"].is_string()) {
                 symbol = entity["id"].get<std::string>();
-                title = label(entity);
+                title = entityLabel(entity);
                 progress.triples += appendTriples(entity, triples);
                 if (symbol.starts_with('Q'))
                     if (const auto count = wikipediaCount(entity))

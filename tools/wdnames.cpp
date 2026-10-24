@@ -1,6 +1,10 @@
 // wdnames: name indexes of items from the block indexes of wdindex.
 //
-// wdnames [-j 20] [-i index] [-o .] <date>.lst
+// wdnames [-j 20] [-i index] [--slim slim] [-o .] <date>.lst
+//
+// With --slim the names of the items in the slim files of wdconvert are taken
+// from their labels (claims.h, entityLabel: "en", else "mul", else the first),
+// the others (items left out) keep the names of index/.
 //
 // The name of an item is its English label, else the first one (as in
 // index/NNN). Writes in the output directory:
@@ -29,6 +33,10 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+#include <zstd.h>
+
+#include "claims.h"
 #include "fold.h"
 #include "triples.h" // duration, secondsSince
 
@@ -58,7 +66,7 @@ struct Strings {
 
 int main(int argc, char *argv[]) {
     size_t threads = 20;
-    fs::path indexDir = "index", output = ".";
+    fs::path indexDir = "index", output = ".", slimDir;
     std::string list;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -66,13 +74,15 @@ int main(int argc, char *argv[]) {
             threads = std::max(1, std::stoi(argv[++i]));
         else if (arg == "-i" && i + 1 < argc)
             indexDir = argv[++i];
+        else if (arg == "--slim" && i + 1 < argc)
+            slimDir = argv[++i];
         else if (arg == "-o" && i + 1 < argc)
             output = argv[++i];
         else
             list = arg;
     }
     if (list.empty()) {
-        std::cerr << "usage: wdnames [-j 20] [-i index] [-o .] <date>.lst\n";
+        std::cerr << "usage: wdnames [-j 20] [-i index] [--slim slim] [-o .] <date>.lst\n";
         return 1;
     }
     try {
@@ -117,6 +127,108 @@ int main(int argc, char *argv[]) {
             }
             if (!complete)
                 throw std::runtime_error(file.string() + ": no EOF line (wdindex not finished?)");
+        }
+        if (!slimDir.empty()) {
+            // Names from the labels of the slim files, in threads by part
+            const auto dictionary = [&] {
+                std::ifstream in(slimDir / "items.dict", std::ios::binary);
+                if (!in)
+                    throw std::runtime_error("cannot open " + (slimDir / "items.dict").string());
+                return std::string((std::istreambuf_iterator<char>(in)), {});
+            }();
+            ZSTD_DDict *dict = ZSTD_createDDict(dictionary.data(), dictionary.size());
+            std::atomic<size_t> next{0};
+            std::atomic<uint64_t> relabeled{0}, changed{0};
+            std::vector<std::thread> pool;
+            for (size_t t = 0; t < threads; ++t)
+                pool.emplace_back([&] {
+                    ZSTD_DCtx *ctx = ZSTD_createDCtx();
+                    ZSTD_DCtx_refDDict(ctx, dict);
+                    for (size_t i; (i = next++) < parts.size();) {
+                        const auto name = std::format("{:03}", parts[i]);
+                        // The ids of the lines, in order, from the frame index
+                        std::vector<uint32_t> ids;
+                        {
+                            std::ifstream in(slimDir / "items" / (name + ".idx"));
+                            for (std::string line; std::getline(in, line);)
+                                if (line.starts_with(":"))
+                                    if (const auto at = line.find(":Q", 1); at != std::string::npos)
+                                        ids.push_back(static_cast<uint32_t>(std::stoul(line.substr(at + 2))));
+                        }
+                        std::ifstream in(slimDir / "items" / name, std::ios::binary);
+                        std::vector<char> input(1 << 20), output(ZSTD_DStreamOutSize());
+                        std::string pending;
+                        size_t line = 0;
+                        auto lines = [&](bool all) {
+                            size_t pos = 0;
+                            for (size_t end; (end = pending.find('\n', pos)) != std::string::npos; pos = end + 1, ++line) {
+                                if (line >= ids.size())
+                                    throw std::runtime_error(name + ": more lines than in its index");
+                                // The top-level "labels" object: the last one of the line (keys are sorted;
+                                // after it only "sitelinks" and "type")
+                                const std::string_view text(pending.data() + pos, end - pos);
+                                const auto at = text.rfind("\"labels\":{");
+                                if (at == std::string_view::npos)
+                                    continue;
+                                size_t depth = 0, k = at + 9;
+                                bool inString = false;
+                                for (; k < text.size(); ++k) {
+                                    const char c = text[k];
+                                    if (inString) {
+                                        if (c == '\\')
+                                            ++k;
+                                        else if (c == '"')
+                                            inString = false;
+                                    } else if (c == '"')
+                                        inString = true;
+                                    else if (c == '{')
+                                        ++depth;
+                                    else if (c == '}' && --depth == 0)
+                                        break;
+                                }
+                                auto labels = nlohmann::json::parse(text.substr(at + 9, k - at - 8), nullptr, false);
+                                if (labels.is_discarded())
+                                    continue;
+                                const auto label = entityLabel(nlohmann::json{{"labels", std::move(labels)}});
+                                const auto q = ids[line];
+                                if (q < byQ.size() && !label.empty()) {
+                                    if (byQ[q] != label)
+                                        ++changed;
+                                    byQ[q] = label;
+                                    ++relabeled;
+                                }
+                            }
+                            pending.erase(0, all ? pending.size() : pos);
+                        };
+                        while (in) {
+                            in.read(input.data(), static_cast<std::streamsize>(input.size()));
+                            ZSTD_inBuffer zin{input.data(), static_cast<size_t>(in.gcount()), 0};
+                            while (zin.pos < zin.size) {
+                                ZSTD_outBuffer zout{output.data(), output.size(), 0};
+                                const auto r = ZSTD_decompressStream(ctx, &zout, &zin);
+                                if (ZSTD_isError(r))
+                                    throw std::runtime_error(name + ": zstd " + ZSTD_getErrorName(r));
+                                pending.append(output.data(), zout.pos);
+                            }
+                            lines(false);
+                        }
+                        lines(true);
+                    }
+                    ZSTD_freeDCtx(ctx);
+                });
+            for (auto &thread : pool)
+                thread.join();
+            ZSTD_freeDDict(dict);
+            named = 0;
+            bytes = 0;
+            for (const auto &n : byQ)
+                if (!n.empty()) {
+                    ++named;
+                    bytes += n.size() + 1;
+                }
+            std::cout << std::format("{} names from the labels of the slim files, {} of them changed ({})", relabeled.load(),
+                                     changed.load(), duration(secondsSince(started)))
+                      << std::endl;
         }
         while (!byQ.empty() && byQ.back().empty())
             byQ.pop_back();

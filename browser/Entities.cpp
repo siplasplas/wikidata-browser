@@ -30,6 +30,7 @@ Entities::Entry Entities::decode(const uchar *bytes) {
 bool Entities::load(const QString &indexDir, const QString &dumpDir, QString &error) {
     *this = Entities();
     dumpDir_ = dumpDir;
+    indexDir_ = indexDir;
     QDir dir(indexDir);
     // The newest .lst: line NNN gives the file name of dump part NNN
     const auto lists = dir.entryList({"*.lst"}, QDir::Files, QDir::Name);
@@ -443,19 +444,103 @@ std::vector<uint32_t> Entities::rankedNames(const QString &text, size_t &exact) 
                 result.push_back(byName_[i]);
             continue;
         }
-        // buckets 0..65535 by 65535 - popularity: the most popular first
-        static thread_local std::vector<size_t> starts;
-        starts.assign(65537, 0);
-        for (uint64_t i = from; i < to; ++i)
-            ++starts[65536 - popularity(byName_[i])];
-        for (size_t b = 1; b < starts.size(); ++b)
-            starts[b] += starts[b - 1];
-        std::vector<uint32_t> group(size_t(to - from));
-        for (uint64_t i = to; i-- > from;) {
-            const auto q = byName_[i];
-            group[--starts[65536 - popularity(q)]] = q;
-        }
+        std::vector<uint32_t> group(byName_ + from, byName_ + to);
+        rankByPopularity(group);
         result.insert(result.end(), group.begin(), group.end());
     }
     return result;
+}
+
+// The most popular first, stable (counting sort by the number of Wikipedias)
+void Entities::rankByPopularity(std::vector<uint32_t> &items) const {
+    if (!popularity_ || items.size() < 2)
+        return;
+    static thread_local std::vector<size_t> starts;
+    starts.assign(65537, 0);
+    for (const auto q : items)
+        ++starts[65536 - popularity(q)];
+    for (size_t b = 1; b < starts.size(); ++b)
+        starts[b] += starts[b - 1];
+    std::vector<uint32_t> sorted(items.size());
+    for (size_t i = items.size(); i-- > 0;)
+        sorted[--starts[65536 - popularity(items[i])]] = items[i];
+    items.swap(sorted);
+}
+
+const Entities::Mapped &Entities::mapped(Mapped (&files)[256], const char *dir, uint32_t bucket) {
+    auto &m = files[bucket & 0xFF];
+    if (!m.tried) {
+        m.tried = true;
+        m.file = std::make_unique<QFile>(QDir(QDir(indexDir_).filePath(dir)).filePath(QString("%1").arg(bucket & 0xFF, 3, 10, QChar('0'))));
+        if (m.file->open(QIODevice::ReadOnly) && m.file->size() > 0) {
+            m.size = m.file->size();
+            m.data = m.file->map(0, m.size);
+        }
+    }
+    return m;
+}
+
+namespace {
+
+// The 32 bits in reverse order (as tools/triples.h)
+uint32_t reverseBits(uint32_t x) {
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0F0F0F0Fu) | ((x & 0x0F0F0F0Fu) << 4);
+    return (x >> 24) | ((x >> 8) & 0xFF00u) | ((x << 8) & 0xFF0000u) | (x << 24);
+}
+
+struct Record { // target-counts: target word, property, count; triples: property, item word, target word
+    uint32_t a, b, c;
+};
+
+// The target word of an id: number << 2 | type (Q 0, P 1, L 2); 0 for none
+uint32_t targetWordOf(const QString &id) {
+    const auto key = keyOf(id);
+    return key == ~0ull ? 0 : uint32_t(key) << 2 | uint32_t(key >> 32);
+}
+
+} // namespace
+
+std::vector<std::pair<uint32_t, uint32_t>> Entities::linksTo(const QString &id) {
+    const uint32_t word = targetWordOf(id.trimmed().toUpper());
+    if (!word)
+        return {};
+    const auto &m = mapped(counts_, "target-counts", word >> 2);
+    if (!m.data)
+        return {};
+    const auto *records = reinterpret_cast<const Record *>(m.data);
+    const size_t n = size_t(m.size) / sizeof(Record);
+    // Sorted by (bit-reversed target number, type, property)
+    auto key = [](uint32_t w) { return uint64_t(reverseBits(w >> 2)) << 2 | (w & 3); };
+    const auto want = key(word);
+    const auto first = std::partition_point(records, records + n, [&](const Record &r) { return key(r.a) < want; });
+    std::vector<std::pair<uint32_t, uint32_t>> result;
+    for (auto r = first; r != records + n && r->a == word; ++r)
+        result.emplace_back(r->b, r->c);
+    std::ranges::stable_sort(result, std::greater{}, &std::pair<uint32_t, uint32_t>::second);
+    return result;
+}
+
+std::vector<uint32_t> Entities::itemsWith(uint32_t property, const QString &target) {
+    const uint32_t word = targetWordOf(target.trimmed().toUpper());
+    if (!word)
+        return {};
+    const auto &m = mapped(triples_, "triple-index-slim", property);
+    if (!m.data)
+        return {};
+    const auto *records = reinterpret_cast<const Record *>(m.data);
+    const size_t n = size_t(m.size) / sizeof(Record);
+    // Sorted by (bit-reversed property, target word, item word)
+    const auto want = uint64_t(reverseBits(property)) << 32 | word;
+    const auto first = std::partition_point(records, records + n, [&](const Record &r) {
+        return (uint64_t(reverseBits(r.a)) << 32 | r.c) < want;
+    });
+    std::vector<uint32_t> items;
+    for (auto r = first; r != records + n && r->a == property && r->c == word; ++r)
+        if ((r->b & 3) != 0) // not deprecated
+            items.push_back(r->b >> 2);
+    items.erase(std::unique(items.begin(), items.end()), items.end()); // two statements of one item
+    rankByPopularity(items);
+    return items;
 }
