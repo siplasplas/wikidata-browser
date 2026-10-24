@@ -28,6 +28,14 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
 - Entity ids in the tree (`Q5`, `P31`, Wikidata URLs of units, calendars,
   globes) are links: click or F2 goes to the entity; Go > Back / Forward
   (Alt+Left, Alt+Right) through the places shown, lines and entities.
+- What points here: Go > What links here (Ctrl+L) shows in the list on the
+  left the properties pointing to the entity (or to the entity of the current
+  row of the tree) with their numbers of items, "P31 instance of — 9,793";
+  Enter or a double click lists those items, the most popular first,
+  Backspace goes back. The context menu of a value of a claim (or Ctrl+I)
+  lists the items with the same property and value: on "occupation: writer"
+  of Q42, all writers. From `target-counts/` (wdcount) and
+  `triple-index-slim/` (wdfilter) in the index directory.
 - Search > Find (Ctrl+F, F3, Shift+F3) in the JSON and the tree; F4 opens the
   JSON in Kate.
 - Settings: the index directory (`q.idx`, `p.idx`, `l.idx`, `<date>.lst`,

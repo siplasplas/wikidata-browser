@@ -9,7 +9,11 @@
 // highlighting and folding, the original text) and as a tree, where property
 // ids may show their English names (View > Property names) and entity ids are
 // links: click or F2 goes to the entity, Alt+Left / Alt+Right go back and
-// forward. Go > Entity (Ctrl+G) reads Q42, P31 or L7 from the dump. Search >
+// forward. Go > Entity (Ctrl+G) reads Q42, P31 or L7 from the dump. Go > What
+// links here (Ctrl+L) lists in the list on the left the properties pointing to
+// an entity with their numbers of items (Enter: those items, Backspace: back);
+// the context menu of a value of a claim (or Ctrl+I) lists the items with the
+// same property and value (target-counts/, triple-index-slim/). Search >
 // Find (Ctrl+F, F3, Shift+F3) in the JSON and the tree. F4 opens the JSON in
 // Kate. The index directory (q.idx, p.idx, l.idx, <date>.lst) and the dump
 // directory are set in Settings and kept in wdbrowse.ini next to the binary;
@@ -28,6 +32,7 @@
 #include <QAbstractListModel>
 #include <QListView>
 #include <QMainWindow>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
@@ -294,12 +299,34 @@ public:
         resize(1400, 900);
 
         connect(filter_, &QLineEdit::textChanged, this, [this] {
-            found_ = false;
+            mode_ = ListMode::lines;
             fillList();
         });
         connect(search_, &QLineEdit::returnPressed, this, [this] { searchNames(); });
         connect(list_->selectionModel(), &QItemSelectionModel::currentChanged, this,
                 [this](const QModelIndex &index) { openRow(index.row()); });
+        // In the summary of links: Enter or a double click opens the items of the property
+        connect(list_, &QListView::activated, this, [this](const QModelIndex &index) {
+            if (mode_ == ListMode::links && index.row() >= 0 && size_t(index.row()) < links_.size())
+                showLinked(links_[size_t(index.row())].first, linksTarget_);
+        });
+        // Backspace in the items of a property: back to the summary
+        connect(new QShortcut(QKeySequence(Qt::Key_Backspace), list_, nullptr, nullptr, Qt::WidgetShortcut),
+                &QShortcut::activated, this, [this] {
+                    if (mode_ == ListMode::linked)
+                        showLinks(linksTarget_);
+                });
+        // Context menu of the tree: items with this property and value, what links here
+        tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tree_, &QTreeView::customContextMenuRequested, this, [this](const QPoint &at) {
+            const auto index = tree_->indexAt(at);
+            if (!index.isValid())
+                return;
+            QMenu menu;
+            addLinkActions(menu, index);
+            if (!menu.isEmpty())
+                menu.exec(tree_->viewport()->mapToGlobal(at));
+        });
         connect(lineBox_, &QSpinBox::editingFinished, this, [this] { go({lineBox_->value() - 1, {}}); });
         // A link of the tree: a click on it, or F2 on its row
         connect(tree_, &QTreeView::clicked, this, [this](const QModelIndex &index) {
@@ -332,6 +359,22 @@ public:
             search_->selectAll();
         });
         goMenu->addAction("&Follow link", QKeySequence(Qt::Key_F2), this, [this] { followLink(); });
+        goMenu->addAction("What &links here", QKeySequence(Qt::CTRL | Qt::Key_L), this, [this] {
+            // to the entity of the current row of the tree, else to the entity shown
+            QString target;
+            if (tabs_->currentWidget() == treePage_)
+                target = linkOfRow(tree_->currentIndex());
+            if (target.isEmpty() && current_.is_object() && current_.contains("id") && current_["id"].is_string())
+                target = QString::fromStdString(current_["id"].get<std::string>());
+            if (!target.isEmpty())
+                showLinks(target);
+        });
+        goMenu->addAction("&Items with this property and value", QKeySequence(Qt::CTRL | Qt::Key_I), this, [this] {
+            const auto index = tree_->currentIndex();
+            const auto target = linkOfRow(index);
+            if (const auto property = propertyOf(index); property && !target.isEmpty())
+                showLinked(property, target);
+        });
         goMenu->addSeparator();
         backAction_ = goMenu->addAction("&Back", QKeySequence(Qt::ALT | Qt::Key_Left), this, [this] { step(-1); });
         forwardAction_ = goMenu->addAction("&Forward", QKeySequence(Qt::ALT | Qt::Key_Right), this, [this] { step(1); });
@@ -411,7 +454,7 @@ public:
         history_.clear();
         position_ = -1;
         lineBox_->setMaximum(std::max<int>(1, static_cast<int>(lines_->count())));
-        found_ = false;
+        mode_ = ListMode::lines;
         fillList();
         if (lines_->count() > 0)
             list_->setCurrentIndex(listModel_->index(0));
@@ -625,7 +668,12 @@ private:
     ListModel *listModel_;
     QLineEdit *search_;
     std::vector<int> rows_;       // lines of the JSONL file shown (filtered)
-    bool found_ = false;          // the list shows names found, not lines
+    // What the list on the left shows
+    enum class ListMode { lines, found, links, linked };
+    ListMode mode_ = ListMode::lines;
+    std::vector<std::pair<uint32_t, uint32_t>> links_; // links: property, number of items
+    QString linksTarget_;                               // links, linked: the entity pointed to
+    uint32_t linkedProperty_ = 0;                       // linked: the property
     std::vector<uint32_t> foundQs_; // items found, in the order shown
     QTabWidget *tabs_;
     // A read-only qcodeedit view with Kate highlighting and folding
@@ -722,7 +770,7 @@ private:
             return;
         }
         size_t exact = 0;
-        found_ = true;
+        mode_ = ListMode::found;
         foundQs_ = entities_.rankedNames(text, exact);
         const int rows = static_cast<int>(std::min<size_t>(foundQs_.size(), INT32_MAX));
         listModel_->reset(rows, [this](int row) {
@@ -739,10 +787,96 @@ private:
     void openRow(int row) {
         if (row < 0)
             return;
-        if (found_)
-            go({-1, QString("Q%1").arg(foundQs_[size_t(row)])});
-        else if (row < static_cast<int>(rows_.size()))
+        if (mode_ == ListMode::found || mode_ == ListMode::linked) {
+            if (size_t(row) < foundQs_.size())
+                go({-1, QString("Q%1").arg(foundQs_[size_t(row)])});
+        } else if (mode_ == ListMode::lines && row < static_cast<int>(rows_.size()))
             go({rows_[row], {}});
+    }
+
+    QString nameOf(const QString &id) const {
+        if (id.startsWith('Q'))
+            return entities_.itemName(id.mid(1).toUInt());
+        if (id.startsWith('P'))
+            return entities_.propertyName(id.mid(1).toUInt());
+        return {};
+    }
+
+    // What points to an entity: its properties with the number of items
+    void showLinks(const QString &target) {
+        links_ = entities_.linksTo(target);
+        if (links_.empty()) {
+            statusBar()->showMessage("nothing points to " + target + " (or no target-counts/ in the index directory)");
+            return;
+        }
+        mode_ = ListMode::links;
+        linksTarget_ = target;
+        uint64_t total = 0;
+        for (const auto &[p, count] : links_)
+            total += count;
+        listModel_->reset(static_cast<int>(links_.size()), [this](int row) {
+            const auto [p, count] = links_[size_t(row)];
+            return QString("P%1  %2 — %L3").arg(p).arg(entities_.propertyName(p)).arg(count);
+        });
+        status_->setText(QString("%L1 items point to %2 %3 by %4 properties (Enter: the items)")
+                                 .arg(total).arg(target).arg(nameOf(target)).arg(links_.size()));
+        list_->setCurrentIndex(listModel_->index(0));
+        list_->setFocus();
+    }
+
+    // The items with property = target, the most popular first
+    void showLinked(uint32_t property, const QString &target) {
+        foundQs_ = entities_.itemsWith(property, target);
+        if (foundQs_.empty()) {
+            statusBar()->showMessage(QString("no items with P%1 = %2 (or no triple-index-slim/)").arg(property).arg(target));
+            return;
+        }
+        mode_ = ListMode::linked;
+        linksTarget_ = target;
+        linkedProperty_ = property;
+        listModel_->reset(static_cast<int>(std::min<size_t>(foundQs_.size(), INT32_MAX)), [this](int row) {
+            const auto q = foundQs_[size_t(row)];
+            const auto wikipedias = entities_.popularity(q);
+            return QString("Q%1  %2%3").arg(q).arg(entities_.itemName(q))
+                    .arg(wikipedias ? QString("  (%1)").arg(wikipedias) : QString());
+        });
+        status_->setText(QString("%L1 items with P%2 %3 = %4 %5 (Backspace: all links)")
+                                 .arg(foundQs_.size()).arg(property).arg(entities_.propertyName(property))
+                                 .arg(target).arg(nameOf(target)));
+        list_->setCurrentIndex(listModel_->index(0));
+    }
+
+    // The entity a row of the tree links to (value or key)
+    static QString linkOfRow(const QModelIndex &index) {
+        for (int column : {1, 0})
+            if (auto entity = index.siblingAtColumn(column).data(linkRole).toString(); !entity.isEmpty())
+                return entity;
+        return {};
+    }
+
+    // The property of the claim a row of the tree belongs to: the nearest key P..
+    // whose parent is "claims"; 0 for none
+    static uint32_t propertyOf(QModelIndex index) {
+        for (index = index.siblingAtColumn(0); index.isValid(); index = index.parent()) {
+            const auto key = index.data(linkRole).toString();
+            const auto parent = index.parent();
+            if (key.startsWith('P') && parent.isValid() && parent.data(Qt::DisplayRole).toString() == "claims")
+                return key.mid(1).toUInt();
+        }
+        return 0;
+    }
+
+    void addLinkActions(QMenu &menu, const QModelIndex &index) {
+        const auto target = linkOfRow(index);
+        if (target.isEmpty())
+            return;
+        if (const auto property = propertyOf(index); property && target != QString("P%1").arg(property))
+            menu.addAction(QString("Items with P%1 %2 = %3 %4").arg(property).arg(entities_.propertyName(property))
+                                   .arg(target).arg(nameOf(target)),
+                           this, [this, property, target] { showLinked(property, target); });
+        menu.addAction(QString("What links here: %1 %2").arg(target).arg(nameOf(target)), this,
+                       [this, target] { showLinks(target); });
+        menu.addAction("Go to " + target, this, [this, target] { go({-1, target}); });
     }
 
     void openInKate() {
