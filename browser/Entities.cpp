@@ -6,6 +6,11 @@
 #include <QXmlStreamReader>
 #include <bzlib.h>
 
+#include <algorithm>
+#include <cstring>
+
+#include "fold.h"
+
 namespace {
 
 uint64_t little(const uchar *bytes, int size) {
@@ -66,7 +71,69 @@ bool Entities::load(const QString &indexDir, const QString &dumpDir, QString &er
     }
     p_ = p.readAll();
     parts_ = parts;
+    // Names of items, optional (wdnames)
+    auto map = [&](const char *name, std::unique_ptr<QFile> &file, qint64 &size) -> const uchar * {
+        file = std::make_unique<QFile>(dir.filePath(name));
+        if (!file->open(QIODevice::ReadOnly) || file->size() == 0)
+            return nullptr;
+        size = file->size();
+        return file->map(0, size);
+    };
+    qint64 bytes = 0;
+    names_ = reinterpret_cast<const char *>(map("names", namesFile_, namesSize_));
+    byQ_ = reinterpret_cast<const uint32_t *>(map("names-by-q", byQFile_, bytes));
+    byQCount_ = bytes / 4;
+    byName_ = reinterpret_cast<const uint32_t *>(map("q-by-name", byNameFile_, bytes));
+    byNameCount_ = bytes / 4;
     return true;
+}
+
+std::string_view Entities::nameAt(uint32_t number) const {
+    if (!hasNames() || number >= byQCount_)
+        return {};
+    const qint64 at = qint64(byQ_[number]) * 2;
+    if (at <= 0 || at >= namesSize_)
+        return {};
+    const char *p = names_ + at;
+    return {p, strnlen(p, size_t(namesSize_ - at))};
+}
+
+QString Entities::itemName(uint32_t number) const {
+    const auto name = nameAt(number);
+    return QString::fromUtf8(name.data(), qsizetype(name.size()));
+}
+
+uint32_t Entities::byName(uint64_t i) const {
+    return hasNames() && qint64(i) < byNameCount_ ? byName_[i] : 0;
+}
+
+std::pair<uint64_t, uint64_t> Entities::namesStartingWith(const QString &text) const {
+    if (!hasNames() || text.isEmpty())
+        return {0, 0};
+    const auto prefix = foldKey(text.toStdString());
+    // q-by-name is sorted by the folded names: the names starting with prefix are one range
+    auto key = [&](uint64_t i) { return foldKey(nameAt(byName_[i])); };
+    uint64_t lo = 0, hi = uint64_t(byNameCount_);
+    // first position whose key is not below prefix
+    for (uint64_t a = 0, b = hi; a < b;) {
+        const uint64_t m = a + (b - a) / 2;
+        if (key(m) < prefix)
+            a = m + 1;
+        else
+            b = m;
+        lo = a;
+    }
+    // first position whose key, cut to the prefix length, is above it
+    uint64_t end = lo;
+    for (uint64_t a = lo, b = hi; a < b;) {
+        const uint64_t m = a + (b - a) / 2;
+        if (key(m).compare(0, prefix.size(), prefix) <= 0)
+            a = m + 1;
+        else
+            b = m;
+        end = a;
+    }
+    return {lo, end};
 }
 
 QString Entities::propertyName(uint32_t number) const {

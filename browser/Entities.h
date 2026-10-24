@@ -9,6 +9,8 @@
 #include <QStringList>
 #include <cstdint>
 #include <memory>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 class Entities {
@@ -22,6 +24,15 @@ public:
 
     // The JSON of an entity ("Q42", "P31", "L7"); empty with error when absent
     QByteArray json(const QString &id, QString &error);
+
+    // Names of items (wdnames: names, names-by-q, q-by-name), when present
+    bool hasNames() const { return names_ && byQ_ && byName_; }
+    // The name of Q<number>, empty when it has none
+    QString itemName(uint32_t number) const;
+    // The range [first, last) of q-by-name whose names start with text (case and
+    // diacritics ignored, fold.h); the Q of position i is byName(i)
+    std::pair<uint64_t, uint64_t> namesStartingWith(const QString &text) const;
+    uint32_t byName(uint64_t i) const;
 
 private:
     struct Entry {
@@ -39,6 +50,11 @@ private:
     const uchar *qData_ = nullptr, *lData_ = nullptr;
     qint64 qSize_ = 0, lSize_ = 0;
     QByteArray p_;             // p.idx, small: read whole
+    std::string_view nameAt(uint32_t number) const; // UTF-8, from the mapped names
+    std::unique_ptr<QFile> namesFile_, byQFile_, byNameFile_;
+    const char *names_ = nullptr;
+    const uint32_t *byQ_ = nullptr, *byName_ = nullptr;
+    qint64 namesSize_ = 0, byQCount_ = 0, byNameCount_ = 0;
     // The last decompressed stream
     QString cachedPath_;
     uint64_t cachedOffset_ = 0;

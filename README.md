@@ -13,6 +13,11 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
 - File > Open: a JSONL file of entities (e.g. `wiktNeeded_1.jsonl` of
   wiktparse), plain or `.jsonl.bz2` with its `.jsonl.idx`; the lines with id
   and English label, a filter, "go to line".
+- Search names (field above the list, Ctrl+K, Enter): the items whose name
+  starts with the text, case and diacritics ignored (`lodz` finds Łódź),
+  shown in the list on the left like the lines of a JSONL file – all of them,
+  millions for one letter, read only as shown (`names`, `names-by-q`,
+  `q-by-name` of `wdnames` in the index directory). Typing `Q42` goes to Q42.
 - Go > Entity (Ctrl+G): `Q42`, `P31` or `L7` read from the whole dump through
   `q.idx`, `p.idx`, `l.idx` (`wddense`): one bz2 stream is decompressed.
 - JSON tab: the original JSON, indented, Kate highlighting and folding; Tree

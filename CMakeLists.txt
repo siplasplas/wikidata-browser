@@ -64,6 +64,7 @@ if(WDB_BROWSER)
 
     add_executable(wdbrowse browser/main.cpp browser/Entities.cpp browser/Entities.h browser/FindBar.cpp
             browser/FindBar.h browser/TreeFindBar.cpp browser/TreeFindBar.h)
+    target_include_directories(wdbrowse PRIVATE tools) # fold.h: the same search key as wdnames
     target_link_libraries(wdbrowse Qt6::Widgets qcodeedit::qcodeedit qcodeedit::kate qt-extra
-            nlohmann_json::nlohmann_json BZip2::BZip2)
+            nlohmann_json::nlohmann_json BZip2::BZip2 ICU::uc)
 endif()

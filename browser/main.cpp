@@ -3,7 +3,9 @@
 // .jsonl.idx) and the whole dump through the dense indexes of wddense.
 //
 // Left: the lines of the JSONL file with their titles, a filter and "go to
-// line". Right: the entity as indented JSON (read-only qcodeedit, Kate
+// line", or the names of items found (search field above, Ctrl+K: names
+// starting with a text, case and diacritics ignored, read only as shown).
+// Right: the entity as indented JSON (read-only qcodeedit, Kate
 // highlighting and folding, the original text) and as a tree, where property
 // ids may show their English names (View > Property names) and entity ids are
 // links: click or F2 goes to the entity, Alt+Left / Alt+Right go back and
@@ -22,7 +24,8 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
+#include <QAbstractListModel>
+#include <QListView>
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -51,6 +54,7 @@
 #include <qce/margins/FoldingGutter.h>
 #include <qce/margins/LineNumberGutter.h>
 
+#include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -208,6 +212,26 @@ QString entityOf(const QString &text) {
     return {};
 }
 
+// The list on the left, filled on demand: lines of the JSONL file or names
+// found (millions for a short text: only the rows shown are read)
+class ListModel : public QAbstractListModel {
+public:
+    std::function<QString(int)> text;
+    int rows = 0;
+    void reset(int count, std::function<QString(int)> rowText) {
+        beginResetModel();
+        rows = count;
+        text = std::move(rowText);
+        endResetModel();
+    }
+    int rowCount(const QModelIndex &parent) const override { return parent.isValid() ? 0 : rows; }
+    QVariant data(const QModelIndex &index, int role) const override {
+        if (role != Qt::DisplayRole || !text || index.row() >= rows)
+            return {};
+        return text(index.row());
+    }
+};
+
 // A place shown: a line of the JSONL file or an entity of the dump
 struct Location {
     int line = -1;
@@ -223,14 +247,22 @@ public:
         auto *leftLayout = new QVBoxLayout(left);
         filter_ = new QLineEdit;
         filter_->setPlaceholderText("filter titles");
+        search_ = new QLineEdit;
+        search_->setPlaceholderText("search names of items (Enter; Ctrl+K)");
+        search_->setClearButtonEnabled(true);
         lineBox_ = new QSpinBox;
         lineBox_->setPrefix("line ");
         lineBox_->setMinimum(1);
         status_ = new QLabel;
-        list_ = new QListWidget;
+        list_ = new QListView;
+        listModel_ = new ListModel;
+        listModel_->setParent(this);
+        list_->setModel(listModel_);
+        list_->setUniformItemSizes(true); // rows are not measured one by one
         auto *top = new QHBoxLayout;
         top->addWidget(filter_);
         top->addWidget(lineBox_);
+        leftLayout->addWidget(search_);
         leftLayout->addLayout(top);
         leftLayout->addWidget(list_);
         leftLayout->addWidget(status_);
@@ -256,11 +288,13 @@ public:
         setCentralWidget(central);
         resize(1400, 900);
 
-        connect(filter_, &QLineEdit::textChanged, this, [this] { fillList(); });
-        connect(list_, &QListWidget::currentRowChanged, this, [this](int row) {
-            if (auto *item = list_->item(row))
-                go({item->data(Qt::UserRole).toInt(), {}});
+        connect(filter_, &QLineEdit::textChanged, this, [this] {
+            found_ = false;
+            fillList();
         });
+        connect(search_, &QLineEdit::returnPressed, this, [this] { searchNames(); });
+        connect(list_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+                [this](const QModelIndex &index) { openRow(index.row()); });
         connect(lineBox_, &QSpinBox::editingFinished, this, [this] { go({lineBox_->value() - 1, {}}); });
         // A link of the tree: a click on it, or F2 on its row
         connect(tree_, &QTreeView::clicked, this, [this](const QModelIndex &index) {
@@ -287,6 +321,10 @@ public:
                 lastAsked_ = id.trimmed().toUpper();
                 go({-1, lastAsked_});
             }
+        });
+        goMenu->addAction("&Search names", QKeySequence(Qt::CTRL | Qt::Key_K), this, [this] {
+            search_->setFocus();
+            search_->selectAll();
         });
         goMenu->addAction("&Follow link", QKeySequence(Qt::Key_F2), this, [this] { followLink(); });
         goMenu->addSeparator();
@@ -360,9 +398,10 @@ public:
         history_.clear();
         position_ = -1;
         lineBox_->setMaximum(std::max<int>(1, static_cast<int>(lines_->count())));
+        found_ = false;
         fillList();
         if (lines_->count() > 0)
-            list_->setCurrentRow(0);
+            list_->setCurrentIndex(listModel_->index(0));
     }
 
     // Shows a place and records it in the history
@@ -553,7 +592,12 @@ private:
     QLineEdit *filter_;
     QSpinBox *lineBox_;
     QLabel *status_;
-    QListWidget *list_;
+    QListView *list_;
+    ListModel *listModel_;
+    QLineEdit *search_;
+    std::vector<int> rows_;       // lines of the JSONL file shown (filtered)
+    bool found_ = false;          // the list shows names found, not lines
+    std::pair<uint64_t, uint64_t> foundRange_; // in q-by-name
     QTabWidget *tabs_;
     // A read-only qcodeedit view with Kate highlighting and folding
     struct CodeView {
@@ -620,20 +664,54 @@ private:
     }
 
     void fillList() {
-        list_->clear();
-        if (!lines_)
+        rows_.clear();
+        if (!lines_) {
+            listModel_->reset(0, {});
             return;
-        const QString text = filter_->text();
-        for (size_t i = 0; i < lines_->count(); ++i) {
-            if (!text.isEmpty() && !lines_->title(i).contains(text, Qt::CaseInsensitive))
-                continue;
-            auto *item = new QListWidgetItem(QString("%1  %2").arg(i + 1).arg(lines_->title(i)));
-            item->setData(Qt::UserRole, static_cast<int>(i));
-            list_->addItem(item);
-            if (list_->count() >= 200000)
-                break;
         }
-        status_->setText(QString("%1 lines, %2 shown").arg(lines_->count()).arg(list_->count()));
+        const QString text = filter_->text();
+        for (size_t i = 0; i < lines_->count(); ++i)
+            if (text.isEmpty() || lines_->title(i).contains(text, Qt::CaseInsensitive))
+                rows_.push_back(static_cast<int>(i));
+        listModel_->reset(static_cast<int>(rows_.size()),
+                          [this](int row) { return QString("%1  %2").arg(rows_[row] + 1).arg(lines_->title(rows_[row])); });
+        status_->setText(QString("%1 lines, %2 shown").arg(lines_->count()).arg(rows_.size()));
+    }
+
+    // Names of items starting with the search text: the list shows them all,
+    // read when shown; exact names come first (sorted by the folded name)
+    void searchNames() {
+        const auto text = search_->text().trimmed();
+        if (text.isEmpty())
+            return;
+        if (!entities_.hasNames()) {
+            statusBar()->showMessage("no names: run wdnames into the index directory");
+            return;
+        }
+        if (auto id = entityOf(text.toUpper()); !id.isEmpty()) { // Q42 typed: the entity itself
+            go({-1, id});
+            return;
+        }
+        foundRange_ = entities_.namesStartingWith(text);
+        const auto count = foundRange_.second - foundRange_.first;
+        found_ = true;
+        const int rows = static_cast<int>(std::min<uint64_t>(count, INT32_MAX));
+        listModel_->reset(rows, [this](int row) {
+            const auto q = entities_.byName(foundRange_.first + uint64_t(row));
+            return QString("Q%1  %2").arg(q).arg(entities_.itemName(q));
+        });
+        status_->setText(QString("%L1 names start with \"%2\"").arg(count).arg(text));
+        if (rows > 0)
+            list_->setCurrentIndex(listModel_->index(0));
+    }
+
+    void openRow(int row) {
+        if (row < 0)
+            return;
+        if (found_)
+            go({-1, QString("Q%1").arg(entities_.byName(foundRange_.first + uint64_t(row)))});
+        else if (row < static_cast<int>(rows_.size()))
+            go({rows_[row], {}});
     }
 
     void openInKate() {
