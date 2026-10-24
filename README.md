@@ -70,6 +70,11 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   JSON (redirects) are `other` with their page title. Blocks without pages
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
+- `wdsample [-j 20] [--percent 3] [--seed 1] <dump directory> <date>.lst <Wikimedia index directory>`
+  – what a slimmer Wikidata would take, on a random sample of whole bz2
+  streams of all parts (offsets from the dump's own indexes): the items' JSON
+  as it is, without hashes, without statement ids, without references, and the
+  bytes of items in no Wikipedia by class (first P31), scaled to the whole dump.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
   `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
