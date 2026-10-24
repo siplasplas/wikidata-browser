@@ -432,6 +432,7 @@ int main(int argc, char *argv[]) {
                   << std::endl;
 
         // Dictionaries for zstd: trained on every 50th stream of the sample
+        std::cout << std::format("training zstd dictionaries on {} streams...", (jobs.size() + 49) / 50) << std::endl;
         std::mutex mutex;
         std::vector<std::string> dataSamples, slimSamples;
         {
@@ -485,7 +486,7 @@ int main(int argc, char *argv[]) {
                     mine.compressed += job.length;
                     mine.uncompressed += text.size();
                     measure(text, mine, z);
-                    if (++done % 2000 == 0) {
+                    if (++done % 500 == 0) {
                         std::lock_guard lock(mutex);
                         std::cout << std::format("  {}/{} streams ({})", done.load(), jobs.size(), duration(secondsSince(started)))
                                   << std::endl;
