@@ -212,6 +212,86 @@ QByteArray Entities::stream(const QString &path, uint64_t offset, QString &error
     return text;
 }
 
+bool Entities::loadSlim(const QString &slimDir, QString &error) {
+    slimDir_.clear();
+    QDir dir(slimDir);
+    const char *indexes[3] = {"q.idx", "p.idx", "l.idx"}, *dicts[3] = {"items.dict", "properties.dict", "lexemes.dict"};
+    SlimKind kinds[3];
+    for (int k = 0; k < 3; ++k) {
+        kinds[k].index = std::make_unique<QFile>(dir.filePath(indexes[k]));
+        if (!kinds[k].index->open(QIODevice::ReadOnly) || kinds[k].index->size() == 0) {
+            error = "cannot read " + dir.filePath(indexes[k]) + " (wddense --slim)";
+            return false;
+        }
+        kinds[k].size = kinds[k].index->size();
+        kinds[k].data = kinds[k].index->map(0, kinds[k].size);
+        QFile dict(dir.filePath(dicts[k]));
+        if (!dict.open(QIODevice::ReadOnly)) {
+            error = "cannot read " + dict.fileName() + " (wdconvert)";
+            return false;
+        }
+        const auto bytes = dict.readAll();
+        kinds[k].dict.reset(ZSTD_createDDict(bytes.constData(), size_t(bytes.size())));
+    }
+    for (int k = 0; k < 3; ++k)
+        slim_[k] = std::move(kinds[k]);
+    slimDir_ = slimDir;
+    return true;
+}
+
+bool Entities::slimEntry(int kind, uint32_t number, Entry &e) const {
+    const auto &k = slim_[kind];
+    if (!k.data)
+        return false;
+    const uchar *at = nullptr;
+    if (kind == 1) { // p.idx: uint32 count, then 16-byte entries
+        if (k.size < 4 || number >= little(k.data, 4))
+            return false;
+        at = k.data + 4 + qint64(number) * 16;
+    } else {
+        if ((qint64(number) + 1) * 12 > k.size)
+            return false;
+        at = k.data + qint64(number) * 12;
+    }
+    e = decode(at);
+    return e.offset != 0 || e.start != 0;
+}
+
+QByteArray Entities::frame(const QString &path, uint64_t offset, const ZSTD_DDict *dict, QString &error) {
+    if (path == cachedFramePath_ && offset == cachedFrameOffset_)
+        return cachedFrame_;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || !file.seek(qint64(offset))) {
+        error = "cannot read " + path;
+        return {};
+    }
+    // Streaming decompression to the end of the frame: its length is not needed
+    std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx *)> ctx(ZSTD_createDCtx(), ZSTD_freeDCtx);
+    ZSTD_DCtx_refDDict(ctx.get(), dict);
+    QByteArray text, in, out(qsizetype(ZSTD_DStreamOutSize()), '\0');
+    for (size_t left = 1; left != 0;) {
+        in = file.read(1 << 20);
+        if (in.isEmpty()) {
+            error = QString("zstd frame at %1 of %2 ends early").arg(offset).arg(path);
+            return {};
+        }
+        ZSTD_inBuffer input{in.constData(), size_t(in.size()), 0};
+        while (input.pos < input.size && left != 0) {
+            ZSTD_outBuffer output{out.data(), size_t(out.size()), 0};
+            left = ZSTD_decompressStream(ctx.get(), &output, &input);
+            if (ZSTD_isError(left)) {
+                error = QString("zstd: %1 at %2 of %3").arg(ZSTD_getErrorName(left)).arg(offset).arg(path);
+                return {};
+            }
+            text.append(out.constData(), qsizetype(output.pos));
+        }
+    }
+    cachedFramePath_ = path;
+    cachedFrameOffset_ = offset;
+    cachedFrame_ = text;
+    return text;
+}
+
 QByteArray Entities::json(const QString &id, QString &error) {
     static const QRegularExpression pattern("^([QPL])(\\d+)$");
     const auto match = pattern.match(id.trimmed().toUpper());
@@ -219,11 +299,28 @@ QByteArray Entities::json(const QString &id, QString &error) {
         error = "not an entity id (Q42, P31, L7): " + id;
         return {};
     }
+    const QChar kind = match.captured(1)[0];
+    // The slim files first
+    if (hasSlim()) {
+        const int k = kind == 'Q' ? 0 : kind == 'P' ? 1 : 2;
+        static const char *dirs[3] = {"items", "properties", "lexemes"};
+        Entry s;
+        if (slimEntry(k, match.captured(2).toUInt(), s)) {
+            const auto text = frame(QDir(slimDir_).filePath(QString("%1/%2").arg(dirs[k]).arg(s.part, 3, 10, QChar('0'))),
+                                    s.offset, slim_[k].dict.get(), error);
+            if (text.isEmpty())
+                return {};
+            const qsizetype end = text.indexOf('\n', s.start);
+            lastSource_ = "slim";
+            return text.mid(s.start, (end < 0 ? text.size() : end) - s.start);
+        }
+    }
     if (!loaded()) {
-        error = "no indexes: Settings > Index directory";
+        error = hasSlim() ? id + " is not in the slim files, and no indexes of the dump: Settings > Index directory"
+                          : "no indexes: Settings > Index directory";
         return {};
     }
-    const QChar kind = match.captured(1)[0];
+    lastSource_ = "dump";
     Entry e;
     if (!entry(kind, match.captured(2).toUInt(), e)) {
         error = id + " is not in the indexes (absent, deleted or merged into another entity)";

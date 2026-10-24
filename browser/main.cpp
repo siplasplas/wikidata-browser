@@ -12,7 +12,8 @@
 // forward. Go > Entity (Ctrl+G) reads Q42, P31 or L7 from the dump. Search >
 // Find (Ctrl+F, F3, Shift+F3) in the JSON and the tree. F4 opens the JSON in
 // Kate. The index directory (q.idx, p.idx, l.idx, <date>.lst) and the dump
-// directory are set in Settings and kept in wdbrowse.ini next to the binary.
+// directory are set in Settings and kept in wdbrowse.ini next to the binary;
+// so is the slim directory of wdconvert, read first (zstd frames).
 //
 // wdbrowse [file.jsonl | file.jsonl.bz2 | Q42]
 #include <QApplication>
@@ -370,6 +371,14 @@ public:
                 loadEntities(true);
             }
         });
+        setup->addAction("&Slim directory (wdconvert)...", this, [this] {
+            auto dir = QxFileDialog::getExistingDirectory(this, "Directory of the slim files of wdconvert (items/, q.idx, items.dict...)",
+                                                          settings().value("entities/slim").toString());
+            if (!dir.isEmpty()) {
+                settings().setValue("entities/slim", dir);
+                loadEntities(true);
+            }
+        });
         setup->addAction("&Dump directory...", this, [this] {
             auto dir = QxFileDialog::getExistingDirectory(this, "Directory of the wikidatawiki-*-pages-articles-multistream*.bz2 parts",
                                                           settings().value("entities/dumps").toString());
@@ -423,18 +432,27 @@ private:
         return s;
     }
 
+    // The indexes of the dump (names, popularity, the dump itself), then the slim files
     void loadEntities(bool report) {
         const auto index = settings().value("entities/index").toString();
-        if (index.isEmpty())
-            return;
+        const auto slim = settings().value("entities/slim").toString();
+        QStringList loaded, errors;
         QString error;
-        if (!entities_.load(index, settings().value("entities/dumps").toString(), error)) {
-            if (report)
-                QMessageBox::warning(this, "wdbrowse", error);
-            statusBar()->showMessage(error);
-            return;
+        if (!index.isEmpty()) {
+            if (entities_.load(index, settings().value("entities/dumps").toString(), error))
+                loaded << "indexes of " + index;
+            else
+                errors << error;
         }
-        statusBar()->showMessage("indexes of " + index);
+        if (!slim.isEmpty()) {
+            if (entities_.loadSlim(slim, error))
+                loaded << "slim files of " + slim;
+            else
+                errors << error;
+        }
+        if (report && !errors.isEmpty())
+            QMessageBox::warning(this, "wdbrowse", errors.join("\n"));
+        statusBar()->showMessage((loaded + errors).join("; "));
         fillTree();
     }
 
@@ -468,7 +486,7 @@ private:
             currentTitle_ = title;
         setWindowTitle(currentTitle_ + (location.entity.isEmpty() ? " — " + path_ : QString()) + " — wdbrowse");
         statusBar()->showMessage(location.entity.isEmpty() ? QString("line %1").arg(location.line + 1)
-                                                           : location.entity + " from the dump");
+                                                           : location.entity + " from the " + entities_.lastSource());
         fillTree();
         return true;
     }

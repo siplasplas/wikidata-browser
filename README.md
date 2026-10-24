@@ -30,8 +30,12 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   (Alt+Left, Alt+Right) through the places shown, lines and entities.
 - Search > Find (Ctrl+F, F3, Shift+F3) in the JSON and the tree; F4 opens the
   JSON in Kate.
-- Settings: the index directory (`q.idx`, `p.idx`, `l.idx`, `<date>.lst`) and
-  the dump directory, kept in `wdbrowse.ini` next to the binary.
+- Settings: the index directory (`q.idx`, `p.idx`, `l.idx`, `<date>.lst`,
+  names, popularity), the dump directory and the slim directory of `wdconvert`
+  (`slim/`: `items/`, `q.idx`…, `items.dict`…), kept in `wdbrowse.ini` next to
+  the binary. Entities are read from the slim files first (one zstd frame of
+  about 512 KiB: under a millisecond), from the dump when they are not there
+  (items left out, about 30 ms); the status bar tells which.
 
 ## Tools
 - `wdlist [directory]` (default `.`) – finds the dump parts

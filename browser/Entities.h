@@ -13,11 +13,21 @@
 #include <utility>
 #include <vector>
 
+#include <zstd.h>
+
 class Entities {
 public:
     // Reads the indexes; false (with error) when the directory has none
     bool load(const QString &indexDir, const QString &dumpDir, QString &error);
     bool loaded() const { return !parts_.isEmpty(); }
+
+    // The slim files of wdconvert (slim/items/NNN, ..., q.idx, p.idx, l.idx of
+    // wddense --slim, items.dict, ...): entities are read from them first, from
+    // the dump when they are not there (items left out). After load().
+    bool loadSlim(const QString &slimDir, QString &error);
+    bool hasSlim() const { return !slimDir_.isEmpty(); }
+    // Where the last entity of json() came from: "slim" or "dump"
+    QString lastSource() const { return lastSource_; }
 
     // English label of P<number> from p.idx, empty when unknown
     QString propertyName(uint32_t number) const;
@@ -49,6 +59,25 @@ private:
     static Entry decode(const uchar *bytes);
     bool entry(QChar kind, uint32_t number, Entry &e) const;
     QByteArray stream(const QString &path, uint64_t offset, QString &error);
+    // The slim entry of an entity, false when it is not in the slim files
+    bool slimEntry(int kind, uint32_t number, Entry &e) const;
+    // A zstd frame of a slim file, decompressed
+    QByteArray frame(const QString &path, uint64_t offset, const ZSTD_DDict *dict, QString &error);
+
+    struct DDictFree {
+        void operator()(ZSTD_DDict *d) const { ZSTD_freeDDict(d); }
+    };
+    struct SlimKind {
+        std::unique_ptr<QFile> index; // q.idx, p.idx (uint32 count, then 16-byte entries), l.idx
+        const uchar *data = nullptr;
+        qint64 size = 0;
+        std::unique_ptr<ZSTD_DDict, DDictFree> dict;
+    };
+    QString slimDir_, lastSource_;
+    SlimKind slim_[3]; // items, properties, lexemes
+    QString cachedFramePath_;
+    uint64_t cachedFrameOffset_ = 0;
+    QByteArray cachedFrame_;
 
     QString dumpDir_;
     QStringList parts_;        // file names of the dump parts by number (.lst)
