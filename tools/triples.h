@@ -72,6 +72,37 @@ inline bool operator==(const Triple &a, const Triple &b) {
     return a.property == b.property && a.itemRank == b.itemRank && a.targetType == b.targetType;
 }
 
+// The order of an index: by property (triple-index: "all items with P106 =
+// Q36180") or by target (target-index: "all that points to Q36180", by
+// property). By target the key is (bit-reversed target number, target type,
+// property, item word), the file the target number % 256.
+enum class Order { byProperty, byTarget };
+
+// The number whose low 8 bits choose the file, and which is bit-reversed first
+inline uint32_t primaryOf(Order order, const Triple &t) { return order == Order::byProperty ? t.property : t.target(); }
+
+inline bool less(Order order, const Triple &a, const Triple &b) {
+    if (order == Order::byProperty)
+        return a < b;
+    const auto ra = reverseBits(a.target()), rb = reverseBits(b.target());
+    if (ra != rb)
+        return ra < rb;
+    if (a.type() != b.type())
+        return a.type() < b.type();
+    if (a.property != b.property)
+        return a.property < b.property;
+    return a.itemRank < b.itemRank;
+}
+
+// --by property | --by target of wdsort and wdmerge
+inline Order orderOf(const std::string &name) {
+    if (name == "property")
+        return Order::byProperty;
+    if (name == "target")
+        return Order::byTarget;
+    throw std::runtime_error("--by property or --by target, not " + name);
+}
+
 inline std::string duration(double seconds) {
     const auto s = static_cast<long>(seconds);
     return std::format("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60);

@@ -1,6 +1,7 @@
 // wdsort: sorts the triple files of wdindex for the reverse index.
 //
-// wdsort [-j 20] [triples [sort-triples]]
+// wdsort [-j 20] [--by property|target] [triples [sort-triples]]
+// (--by target: by target, then property, item; for target-index, see triples.h)
 //
 // Each file NNN of the input directory (default triples) is read, sorted by
 // (bit-reversed property, target, item, rank), freed of repeated triples and written
@@ -24,13 +25,16 @@ namespace fs = std::filesystem;
 
 int main(int argc, char *argv[]) {
     size_t threads = 20;
+    Order order = Order::byProperty;
     std::vector<fs::path> dirs;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-j" && i + 1 < argc)
             threads = std::max(1, std::stoi(argv[++i]));
+        else if (arg == "--by" && i + 1 < argc)
+            order = orderOf(argv[++i]);
         else if (arg == "-h" || arg == "--help") {
-            std::cout << "usage: wdsort [-j 20] [triples [sort-triples]]\n";
+            std::cout << "usage: wdsort [-j 20] [--by property|target] [triples [sort-triples]]\n";
             return 0;
         } else
             dirs.emplace_back(arg);
@@ -77,7 +81,7 @@ int main(int argc, char *argv[]) {
                             if (!in)
                                 throw std::runtime_error("cannot read " + (input / file.name).string());
                         }
-                        std::ranges::sort(data, [](const Triple &a, const Triple &b) { return a < b; });
+                        std::ranges::sort(data, [order](const Triple &a, const Triple &b) { return less(order, a, b); });
                         const auto end = std::unique(data.begin(), data.end());
                         repeated += static_cast<uint64_t>(data.end() - end);
                         data.erase(end, data.end());

@@ -106,11 +106,11 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   dictionary trained on the sample; scaled to the whole dump. `--levels
   3,9,15,19` also compares zstd levels (512 KiB frames, dictionary): size and
   compression time.
-- `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
+- `wdsort [-j 20] [--by property|target] [triples [sort-triples]]` – sorts each triple file of
   `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
   files from a queue, the largest first; `NNN.part` is renamed when done.
-- `wdmerge [-j 20] [sort-triples [triple-index]]` – merges the sorted files into
+- `wdmerge [-j 20] [--by property|target] [sort-triples [triple-index]]` – merges the sorted files into
   256 index files `triple-index/000` … `255`: file `NNN` holds the triples of
   all parts with property % 256 = `NNN`, sorted by (bit-reversed property,
   target word, item word), each triple once. Input files are memory-mapped; from each one
@@ -182,6 +182,19 @@ reversed property are the reversed property % 256. In every sorted file the
 triples of one remainder are therefore one contiguous run, found by binary
 search, and `wdmerge` merges these runs. The same works for any power of two:
 2^n files take the top n bits of the reversed property.
+
+### Index by target
+`--by target` makes the other reverse index, `target-index/`: files by the
+target's number % 256, sorted by (bit-reversed target number, target type,
+property, item word). All that points to Q34770 (language) is one contiguous
+run of `target-index/` file 34770 % 256, its triples grouped by property:
+counting them gives "P31 instance of 7812, P279 subclass of 312…" in one pass.
+Made from `triple-index-slim/`, without the dump:
+
+```
+wdsort -j 20 --by target triple-index-slim target-sorted
+wdmerge -j 20 --by target target-sorted target-index
+```
 
 ### Lookup
 "All items with occupation (P106) writer (Q36180)": file `triple-index/106`

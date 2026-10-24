@@ -1,6 +1,7 @@
 // wdmerge: merges the sorted triple files of wdsort into 256 index files.
 //
-// wdmerge [-j 20] [sort-triples [triple-index]]
+// wdmerge [-j 20] [--by property|target] [sort-triples [triple-index]]
+// (--by target: files by target % 256, sorted by target, property, item)
 //
 // Output file NNN (000-255) holds the triples of all input files whose
 // property % 256 = NNN, sorted by (bit-reversed property, target,
@@ -65,10 +66,10 @@ private:
     size_t size_ = 0;
 };
 
-// The run of a sorted file with property % 256 = bucket
-std::span<const Triple> runOf(std::span<const Triple> sorted, uint32_t bucket) {
-    const uint32_t top = reverseBits(bucket) & 0xFF000000u; // top 8 bits of reversed properties of the bucket
-    auto key = [](const Triple &t) { return reverseBits(t.property) & 0xFF000000u; };
+// The run of a sorted file with property (or target) % 256 = bucket
+std::span<const Triple> runOf(std::span<const Triple> sorted, uint32_t bucket, Order order) {
+    const uint32_t top = reverseBits(bucket) & 0xFF000000u; // top 8 bits of the reversed numbers of the bucket
+    auto key = [order](const Triple &t) { return reverseBits(primaryOf(order, t)) & 0xFF000000u; };
     const auto begin = std::ranges::lower_bound(sorted, top, {}, key);
     const auto end = std::ranges::upper_bound(begin, sorted.end(), top, {}, key);
     return {begin, end};
@@ -78,13 +79,16 @@ std::span<const Triple> runOf(std::span<const Triple> sorted, uint32_t bucket) {
 
 int main(int argc, char *argv[]) {
     size_t threads = 20;
+    Order order = Order::byProperty;
     std::vector<fs::path> dirs;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-j" && i + 1 < argc)
             threads = std::max(1, std::stoi(argv[++i]));
+        else if (arg == "--by" && i + 1 < argc)
+            order = orderOf(argv[++i]);
         else if (arg == "-h" || arg == "--help") {
-            std::cout << "usage: wdmerge [-j 20] [sort-triples [triple-index]]\n";
+            std::cout << "usage: wdmerge [-j 20] [--by property|target] [sort-triples [triple-index]]\n";
             return 0;
         } else
             dirs.emplace_back(arg);
@@ -128,9 +132,9 @@ int main(int argc, char *argv[]) {
                         // One run of each input file, merged through a heap of their heads
                         std::vector<std::span<const Triple>> runs;
                         for (const auto &file : files)
-                            if (auto run = runOf(file->triples(), bucket); !run.empty())
+                            if (auto run = runOf(file->triples(), bucket, order); !run.empty())
                                 runs.push_back(run);
-                        auto later = [&](size_t a, size_t b) { return runs[b].front() < runs[a].front(); };
+                        auto later = [&](size_t a, size_t b) { return less(order, runs[b].front(), runs[a].front()); };
                         std::priority_queue<size_t, std::vector<size_t>, decltype(later)> heap(later);
                         for (size_t r = 0; r < runs.size(); ++r)
                             heap.push(r);
