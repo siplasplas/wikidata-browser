@@ -82,9 +82,10 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   streams of all parts (offsets from the dump's own indexes): the items' JSON
   as it is, without hashes, without statement ids, without references, and the
   bytes of items in no Wikipedia by class (first P31); the same for the items
-  kept (all but scholarly articles in no Wikipedia), and their slim JSON and
-  references apart compressed with zstd in frames of 10 items (levels 3 and 19,
-  without and with a dictionary trained on the sample); scaled to the whole dump.
+  kept (all but scholarly articles in no Wikipedia), compressed with zstd in
+  frames of about 64 KiB, 256 KiB, 512 KiB and 1 MiB uncompressed, with
+  references (and without, at 512 KiB), level 3, level 3 and level 19 with a
+  dictionary trained on the sample; scaled to the whole dump.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
   `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take

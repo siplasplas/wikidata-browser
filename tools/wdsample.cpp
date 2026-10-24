@@ -147,11 +147,18 @@ struct Totals {
     uint64_t noWikiItems = 0, noWikiBytes = 0;
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> classes; // first P31 of items in no Wikipedia: count, bytes
     uint64_t kept = 0, k[4] = {}, refsRaw = 0;              // items kept: the four sizes; references apart
-    uint64_t zData[4] = {}, zRefs[4] = {};                  // zstd: 3, 3 + dictionary, 19, 19 + dictionary
+    // zstd (level 3, level 3 + dictionary, level 19 + dictionary) of frames of about
+    // 64 KiB, 256 KiB, 512 KiB, 1 MiB of items with references; and 512 KiB without
+    uint64_t zData[4][3] = {}, zSlim[3] = {}, frames[4] = {};
     void add(const Totals &o) {
         kept += o.kept, refsRaw += o.refsRaw;
-        for (int i = 0; i < 4; ++i)
-            k[i] += o.k[i], zData[i] += o.zData[i], zRefs[i] += o.zRefs[i];
+        for (int i = 0; i < 4; ++i) {
+            k[i] += o.k[i], frames[i] += o.frames[i];
+            for (int j = 0; j < 3; ++j)
+                zData[i][j] += o.zData[i][j];
+        }
+        for (int j = 0; j < 3; ++j)
+            zSlim[j] += o.zSlim[j];
         compressed += o.compressed, uncompressed += o.uncompressed, pages += o.pages, items += o.items, other += o.other;
         xml += o.xml;
         for (int i = 0; i < 4; ++i)
@@ -164,39 +171,66 @@ struct Totals {
     }
 };
 
-// zstd of frames of 10 items, one per thread; without dictionaries (training)
-// it only collects samples
+// Frames of items about a size (uncompressed; an item larger than it is a frame
+// of its own), compressed with zstd: level 3, level 3 + dictionary, level 19 +
+// dictionary. Frames may span streams of the sample, as items of a part do.
+struct Series {
+    size_t target;
+    std::string frame;
+    uint64_t z[3] = {};
+    uint64_t frames = 0;
+};
+
+// One per thread; without dictionaries (training) it only collects samples
 struct Compressor {
-    static constexpr int levels[2] = {3, 19};
-    const ZSTD_CDict *dataDict[2] = {}, *refsDict[2] = {};
+    const ZSTD_CDict *dataDict3 = nullptr, *dataDict19 = nullptr, *slimDict3 = nullptr, *slimDict19 = nullptr;
     ZSTD_CCtx *ctx = ZSTD_createCCtx();
-    std::string data, refs, out;
-    int dataCount = 0, refsCount = 0;
-    std::vector<std::string> *dataSamples = nullptr, *refsSamples = nullptr; // training
+    std::string out;
+    Series data[4] = {{64 << 10}, {256 << 10}, {512 << 10}, {1 << 20}}; // items with references
+    Series slim{512 << 10};                                               // items without references
+    std::vector<std::string> *dataSamples = nullptr, *slimSamples = nullptr; // training
     ~Compressor() { ZSTD_freeCCtx(ctx); }
-    void compress(const std::string &frame, const ZSTD_CDict *const dicts[2], uint64_t z[4]) {
-        out.resize(ZSTD_compressBound(frame.size()));
-        for (int l = 0; l < 2; ++l) {
-            z[2 * l] += ZSTD_compressCCtx(ctx, out.data(), out.size(), frame.data(), frame.size(), levels[l]);
-            z[2 * l + 1] += ZSTD_compress_usingCDict(ctx, out.data(), out.size(), frame.data(), frame.size(), dicts[l]);
-        }
+    void compress(Series &series, const ZSTD_CDict *dict3, const ZSTD_CDict *dict19) {
+        const auto &f = series.frame;
+        out.resize(ZSTD_compressBound(f.size()));
+        series.z[0] += ZSTD_compressCCtx(ctx, out.data(), out.size(), f.data(), f.size(), 3);
+        series.z[1] += ZSTD_compress_usingCDict(ctx, out.data(), out.size(), f.data(), f.size(), dict3);
+        series.z[2] += ZSTD_compress_usingCDict(ctx, out.data(), out.size(), f.data(), f.size(), dict19);
+        ++series.frames;
+        series.frame.clear();
     }
-    void add(std::string &frame, int &count, const std::string &line, const ZSTD_CDict *const dicts[2], uint64_t z[4],
-             std::vector<std::string> *samples) {
-        if (samples) {
-            samples->push_back(line);
+    void add(const std::string &withReferences, const std::string &withoutReferences) {
+        if (dataSamples) {
+            dataSamples->push_back(withReferences);
+            slimSamples->push_back(withoutReferences);
             return;
         }
-        frame += line;
-        frame += '\n';
-        if (++count == 10)
-            flush(frame, count, dicts, z);
+        for (auto &series : data) {
+            series.frame += withReferences;
+            series.frame += '\n';
+            if (series.frame.size() >= series.target)
+                compress(series, dataDict3, dataDict19);
+        }
+        slim.frame += withoutReferences;
+        slim.frame += '\n';
+        if (slim.frame.size() >= slim.target)
+            compress(slim, slimDict3, slimDict19);
     }
-    void flush(std::string &frame, int &count, const ZSTD_CDict *const dicts[2], uint64_t z[4]) {
-        if (count)
-            compress(frame, dicts, z);
-        frame.clear();
-        count = 0;
+    // The last frames, and the sizes into t
+    void finish(Totals &t) {
+        if (dataSamples)
+            return;
+        for (int i = 0; i < 4; ++i) {
+            if (!data[i].frame.empty())
+                compress(data[i], dataDict3, dataDict19);
+            for (int j = 0; j < 3; ++j)
+                t.zData[i][j] += data[i].z[j];
+            t.frames[i] += data[i].frames;
+        }
+        if (!slim.frame.empty())
+            compress(slim, slimDict3, slimDict19);
+        for (int j = 0; j < 3; ++j)
+            t.zSlim[j] += slim.z[j];
     }
 };
 
@@ -280,8 +314,9 @@ void measure(const std::string &text, Totals &t, Compressor &z) {
                                 f(statement);
         };
         statements([](json &s) { s.erase("id"); });
-        const uint64_t noIds = entity.dump().size();
+        const uint64_t noIds = entity.dump().size(); // with references
         t.v[2] += noIds;
+        const std::string withReferences = entity.dump();
         // References apart: {"id":..,"references":{"P569":[[ref, ref], []]}}
         json refs = json::object();
         bool anyRefs = false;
@@ -303,18 +338,10 @@ void measure(const std::string &text, Totals &t, Compressor &z) {
         if (kept) {
             t.k[2] += noIds;
             t.k[3] += slim.size();
-            z.add(z.data, z.dataCount, slim, z.dataDict, t.zData, z.dataSamples);
-            if (anyRefs) {
-                const std::string line = json{{"id", entity["id"]}, {"references", std::move(refs)}}.dump();
-                t.refsRaw += line.size() + 1;
-                z.add(z.refs, z.refsCount, line, z.refsDict, t.zRefs, z.refsSamples);
-            }
+            z.add(withReferences, slim);
+            if (anyRefs)
+                t.refsRaw += json{{"id", entity["id"]}, {"references", std::move(refs)}}.dump().size() + 1;
         }
-    }
-    // Frames do not cross the streams of the dump
-    if (!z.dataSamples) {
-        z.flush(z.data, z.dataCount, z.dataDict, t.zData);
-        z.flush(z.refs, z.refsCount, z.refsDict, t.zRefs);
     }
 }
 
@@ -406,16 +433,16 @@ int main(int argc, char *argv[]) {
 
         // Dictionaries for zstd: trained on every 50th stream of the sample
         std::mutex mutex;
-        std::vector<std::string> dataSamples, refsSamples;
+        std::vector<std::string> dataSamples, slimSamples;
         {
             std::atomic<size_t> next{0};
             std::vector<std::thread> pool;
             for (size_t t = 0; t < threads; ++t)
                 pool.emplace_back([&] {
-                    std::vector<std::string> data, refs;
+                    std::vector<std::string> data, slims;
                     Compressor z;
                     z.dataSamples = &data;
-                    z.refsSamples = &refs;
+                    z.slimSamples = &slims;
                     Totals ignored;
                     for (size_t i; (i = next.fetch_add(50)) < jobs.size();) {
                         const auto &job = jobs[i];
@@ -424,25 +451,24 @@ int main(int argc, char *argv[]) {
                     std::lock_guard lock(mutex);
                     for (auto &d : data)
                         dataSamples.push_back(std::move(d));
-                    for (auto &r : refs)
-                        refsSamples.push_back(std::move(r));
+                    for (auto &r : slims)
+                        slimSamples.push_back(std::move(r));
                 });
             for (auto &thread : pool)
                 thread.join();
         }
         std::shuffle(dataSamples.begin(), dataSamples.end(), random);
-        std::shuffle(refsSamples.begin(), refsSamples.end(), random);
+        std::shuffle(slimSamples.begin(), slimSamples.end(), random);
         const auto dataDictionary = trainDictionary(dataSamples, 110 << 10);
-        const auto refsDictionary = trainDictionary(refsSamples, 110 << 10);
+        const auto slimDictionary = trainDictionary(slimSamples, 110 << 10);
         dataSamples.clear();
-        refsSamples.clear();
-        ZSTD_CDict *dicts[4];
-        for (int l = 0; l < 2; ++l) {
-            dicts[l] = ZSTD_createCDict(dataDictionary.data(), dataDictionary.size(), Compressor::levels[l]);
-            dicts[2 + l] = ZSTD_createCDict(refsDictionary.data(), refsDictionary.size(), Compressor::levels[l]);
-        }
-        std::cout << std::format("dictionaries: {} B for the items, {} B for the references ({})", dataDictionary.size(),
-                                 refsDictionary.size(), duration(secondsSince(started)))
+        slimSamples.clear();
+        ZSTD_CDict *dicts[4] = {ZSTD_createCDict(dataDictionary.data(), dataDictionary.size(), 3),
+                                ZSTD_createCDict(dataDictionary.data(), dataDictionary.size(), 19),
+                                ZSTD_createCDict(slimDictionary.data(), slimDictionary.size(), 3),
+                                ZSTD_createCDict(slimDictionary.data(), slimDictionary.size(), 19)};
+        std::cout << std::format("dictionaries: {} B with references, {} B without ({})", dataDictionary.size(),
+                                 slimDictionary.size(), duration(secondsSince(started)))
                   << std::endl;
 
         Totals totals;
@@ -452,10 +478,7 @@ int main(int argc, char *argv[]) {
             pool.emplace_back([&] {
                 Totals mine;
                 Compressor z;
-                for (int l = 0; l < 2; ++l) {
-                    z.dataDict[l] = dicts[l];
-                    z.refsDict[l] = dicts[2 + l];
-                }
+                z.dataDict3 = dicts[0], z.dataDict19 = dicts[1], z.slimDict3 = dicts[2], z.slimDict19 = dicts[3];
                 for (size_t i; (i = next++) < jobs.size();) {
                     const auto &job = jobs[i];
                     const auto text = stream(dumps / parts[job.part], job.offset, job.length);
@@ -468,6 +491,7 @@ int main(int argc, char *argv[]) {
                                   << std::endl;
                     }
                 }
+                z.finish(mine);
                 std::lock_guard lock(mutex);
                 totals.add(mine);
             });
@@ -502,13 +526,15 @@ int main(int argc, char *argv[]) {
                   << "    and without statement ids         " << gb(totals.k[2]) << "\n"
                   << "    and without references (slim)     " << gb(totals.k[3]) << "\n"
                   << "  references apart                    " << gb(totals.refsRaw) << "\n"
-                  << "zstd, frames of 10 items:              level 3   + dict   level 19   + dict\n"
-                  << std::format("  slim items                        {:8.1f} {:8.1f} {:9.1f} {:8.1f} GB\n",
-                                 totals.zData[0] * scale / 1e9, totals.zData[1] * scale / 1e9, totals.zData[2] * scale / 1e9,
-                                 totals.zData[3] * scale / 1e9)
-                  << std::format("  references                        {:8.1f} {:8.1f} {:9.1f} {:8.1f} GB\n",
-                                 totals.zRefs[0] * scale / 1e9, totals.zRefs[1] * scale / 1e9, totals.zRefs[2] * scale / 1e9,
-                                 totals.zRefs[3] * scale / 1e9)
+                  << "zstd of the items kept, frames by size (uncompressed):   level 3  + dict  level 19 + dict\n";
+        const char *sizes[4] = {" 64 KiB", "256 KiB", "512 KiB", "  1 MiB"};
+        for (int i = 0; i < 4; ++i)
+            std::cout << std::format("  with references, {} ({:5.1f} items/frame)      {:7.1f}  {:7.1f}  {:7.1f} GB\n", sizes[i],
+                                     double(totals.kept) / std::max<uint64_t>(1, totals.frames[i]),
+                                     totals.zData[i][0] * scale / 1e9, totals.zData[i][1] * scale / 1e9,
+                                     totals.zData[i][2] * scale / 1e9);
+        std::cout << std::format("  without references, 512 KiB                         {:7.1f}  {:7.1f}  {:7.1f} GB\n",
+                                 totals.zSlim[0] * scale / 1e9, totals.zSlim[1] * scale / 1e9, totals.zSlim[2] * scale / 1e9)
                   << "done in " << duration(secondsSince(started)) << std::endl;
         for (auto *d : dicts)
             ZSTD_freeCDict(d);
