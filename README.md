@@ -136,6 +136,7 @@ wdsort -j 20                                            # sort-triples/
 wdmerge -j 20                                           # triple-index/
 wddense 20261001.lst                                    # q.idx, p.idx, l.idx, popularity
 wdfilter -j 20                                          # removed, triple-index-slim/
+wdcount -j 20                                           # target-counts/
 wdconvert -j 20 <dump directory> 20261001.lst <Wikimedia index directory>   # slim/ (~1 h)
 wddense --slim slim 20261001.lst                        # slim/q.idx, p.idx, l.idx
 ```
@@ -183,18 +184,20 @@ triples of one remainder are therefore one contiguous run, found by binary
 search, and `wdmerge` merges these runs. The same works for any power of two:
 2^n files take the top n bits of the reversed property.
 
-### Index by target
-`--by target` makes the other reverse index, `target-index/`: files by the
-target's number % 256, sorted by (bit-reversed target number, target type,
-property, item word). All that points to Q34770 (language) is one contiguous
-run of `target-index/` file 34770 % 256, its triples grouped by property:
-counting them gives "P31 instance of 7812, P279 subclass of 312…" in one pass.
-Made from `triple-index-slim/`, without the dump:
+### What points to an entity
+`wdcount [-j 20] [-i triple-index-slim] [-o target-counts]` counts, for each
+(target, property), the items pointing to the target (statements not
+deprecated) – each such pair is one contiguous run of the triple index. A
+record has 12 bytes, 3 little-endian uint32: target word (number << 2 | type),
+property, count; 256 files by target number % 256, sorted by (bit-reversed
+target number, type, property). All that points to Q34770 (language) is one
+contiguous run of file `34770 % 256`: "P31 instance of 7812, P279 subclass of
+312…"; the items of one property are then the run (P, Q34770) of the triple
+index. No item numbers are repeated, so it is much smaller than the triples.
 
-```
-wdsort -j 20 --by target triple-index-slim target-sorted
-wdmerge -j 20 --by target target-sorted target-index
-```
+(`wdsort`/`wdmerge --by target` can also make the full index by target, with
+the items: (bit-reversed target number, type, property, item word) – not
+needed with the counts.)
 
 ### Lookup
 "All items with occupation (P106) writer (Q36180)": file `triple-index/106`

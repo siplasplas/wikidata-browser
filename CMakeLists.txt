@@ -36,6 +36,9 @@ target_link_libraries(wdconvert BZip2::BZip2 nlohmann_json::nlohmann_json PkgCon
 # wdfilter: triple index without scholarly articles in no Wikipedia; mask of the items left out
 add_executable(wdfilter tools/wdfilter.cpp tools/triples.h)
 
+# wdcount: what points to each entity, counted by property (target-counts/)
+add_executable(wdcount tools/wdcount.cpp tools/triples.h)
+
 # wddense: dense indexes q.idx, p.idx (with English names), l.idx from index/ of wdindex
 add_executable(wddense tools/wddense.cpp)
 
