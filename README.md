@@ -70,6 +70,13 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   JSON (redirects) are `other` with their page title. Blocks without pages
   (siteinfo, end) have count 0. Results are written as `NNN.part` and renamed
   when done: a stopped run continues with the parts not done. Progress every 10 s.
+- `wdfilter [-j 20] [--class 13442814] [-i triple-index] [-o triple-index-slim] [--popularity popularity] [--removed removed]`
+  – the triple index without the items of a class in no Wikipedia (scholarly
+  articles by default): items with P31 = the class (rank not deprecated) and 0
+  in `popularity`, found by binary search in `triple-index/031`. Writes
+  `removed`, the mask of the items left out (1 bit per Q: bit q % 8 of byte
+  q / 8, also for the conversion of the dump), and the 256 files without their
+  triples. Triples pointing to them from other items stay.
 - `wdsample [-j 20] [--percent 3] [--seed 1] <dump directory> <date>.lst <Wikimedia index directory>`
   – what a slimmer Wikidata would take, on a random sample of whole bz2
   streams of all parts (offsets from the dump's own indexes): the items' JSON
@@ -99,6 +106,8 @@ wdlist <dump directory>                                 # 20261001.lst
 wdindex -j 20 <dump directory> 20261001.lst             # triples/, index/  (~1 h, Release build)
 wdsort -j 20                                            # sort-triples/
 wdmerge -j 20                                           # triple-index/
+wddense 20261001.lst                                    # q.idx, p.idx, l.idx, popularity
+wdfilter -j 20                                          # removed, triple-index-slim/
 ```
 
 Use a Release build: in a Debug build JSON parsing is about 15 times slower

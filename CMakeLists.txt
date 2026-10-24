@@ -27,6 +27,9 @@ add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)
 add_executable(wdsample tools/wdsample.cpp)
 target_link_libraries(wdsample BZip2::BZip2 nlohmann_json::nlohmann_json)
 
+# wdfilter: triple index without scholarly articles in no Wikipedia; mask of the items left out
+add_executable(wdfilter tools/wdfilter.cpp tools/triples.h)
+
 # wddense: dense indexes q.idx, p.idx (with English names), l.idx from index/ of wdindex
 add_executable(wddense tools/wddense.cpp)
 
