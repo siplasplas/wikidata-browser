@@ -81,7 +81,10 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   – what a slimmer Wikidata would take, on a random sample of whole bz2
   streams of all parts (offsets from the dump's own indexes): the items' JSON
   as it is, without hashes, without statement ids, without references, and the
-  bytes of items in no Wikipedia by class (first P31), scaled to the whole dump.
+  bytes of items in no Wikipedia by class (first P31); the same for the items
+  kept (all but scholarly articles in no Wikipedia), and their slim JSON and
+  references apart compressed with zstd in frames of 10 items (levels 3 and 19,
+  without and with a dictionary trained on the sample); scaled to the whole dump.
 - `wdsort [-j 20] [triples [sort-triples]]` – sorts each triple file of
   `wdindex` by (bit-reversed property, target word, item word), leaves out repeated
   triples and writes it under the same name to `sort-triples`. Threads take
