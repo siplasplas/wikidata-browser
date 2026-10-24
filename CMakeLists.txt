@@ -26,6 +26,11 @@ add_executable(wdmerge tools/wdmerge.cpp tools/triples.h)
 # wddense: dense indexes q.idx, p.idx (with English names), l.idx from index/ of wdindex
 add_executable(wddense tools/wddense.cpp)
 
+find_package(ICU REQUIRED COMPONENTS uc)
+# wdnames: names, names-by-q, q-by-name (search by name) from index/ of wdindex
+add_executable(wdnames tools/wdnames.cpp tools/fold.h)
+target_link_libraries(wdnames ICU::uc)
+
 # wdbrowse: the browser (Qt6). The tools above need no Qt; -DWDB_BROWSER=OFF builds only them.
 option(WDB_BROWSER "Build the browser wdbrowse (Qt6, qcodeedit, qt-extra)" ON)
 if(WDB_BROWSER)

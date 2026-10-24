@@ -76,6 +76,9 @@ qt-extra from the sibling checkouts `../qcodeedit`, `../qt-extra` or fetched;
   block indexes of `wdindex` (no second pass over the dump): `q.idx`, `p.idx`,
   `l.idx`, see below.
 
+- `wdnames [-j 20] [-i index] [-o .] <date>.lst` – name indexes of items from
+  `index/` of `wdindex`: `names`, `names-by-q`, `q-by-name`, see below.
+
 ## Building the reverse index of entity links
 
 ```
@@ -147,6 +150,26 @@ the English labels, to show `instance of` instead of `P31`: uint32 count, then
 16-byte entries (12 bytes as above, uint32 offset of the label in the names),
 then the names, UTF-8, each ended by `\0`. Sizes: about 1.7 GB for Q (up to
 Q~140 million), 20 MB for L, under 1 MB for P.
+
+### Names of items
+The name of an item is its English label, else the first one: one name per
+item, not all labels, so the index does not repeat Wikidata. The names of all
+items take 6.4 GB (121.8 million items, 52 bytes on average – titles of
+scholarly articles and chemical names are long), so 4-byte offsets to bytes
+would not do:
+- `names`: the names in the order of Q numbers, UTF-8, each ended by `\0` and
+  padded with a second `\0` to an even length; an empty name at offset 0.
+- `names-by-q`: dense, uint32 per Q: offset of its name in 2-byte units (4
+  bytes reach 8 GiB); 0 = no name. The name of any Q in one seek.
+- `q-by-name`: the Q numbers of named items sorted by the search key of the
+  name, then by Q. Binary search finds a name and, as one contiguous range,
+  the names starting with a text – its size is known at once, the first ones
+  are shown.
+
+The search key (`tools/fold.h`, ICU) ignores case and diacritics: case
+folding, NFD without combining marks, and letters that do not decompose by
+hand (Łódź → lodz, Straße → strasse, Ærøskøbing → aeroskobing). Sorting and
+searching must use the same function.
 
 ### Block index
 `index/NNN` of `wdindex` lists the bz2 blocks of dump part `NNN` and their
